@@ -1,5 +1,37 @@
 [project]
 name = "ocr-tool"
 version = "0.1.0"
-requires-python = ">=3.13"
-dependencies = []
+description = "OCRTool —— Windows 桌面本地 OCR 工具（PySide6 + RapidOCR + ONNX Runtime CPU，完全离线）"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "pyside6-essentials",
+    "onnxruntime",
+    "rapidocr",
+    "pyinstaller",
+    "opencv-python-headless",
+]
+
+[project.scripts]
+ocrtool = "ocrtool.main:main"
+
+[dependency-groups]
+dev = [
+    "pytest",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ocrtool"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.uv]
+# rapidocr 硬依赖 opencv-python（自带 Qt5 插件，与 PySide6 同进程冲突）。
+# 覆盖为永假 marker 使其不参与解析，cv2 改由直接依赖的 opencv-python-headless 提供。
+override-dependencies = [
+    "opencv-python; sys_platform == 'never'",
+]

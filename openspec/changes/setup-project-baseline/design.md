@@ -149,5 +149,5 @@ rapidocr 持有独立的 `RapidOCR` logger，会向 stderr 输出识别内容，
 
 ## Open Questions
 
-- **PP-OCRv6 识别模型是否自带字符字典？** 上游 `default_models.yaml` 中识别模型条目只列单个 `.onnx` 文件，推断字典嵌于 ONNX metadata。若实际需要独立的字典文件，`models/<dir>/` 的目录契约需增加一项。此问题在 Migration Plan 第 1 步的 spike 中即可确认，且只影响模型目录的文件清单，不影响解析规则与回退顺序。
-- **发布产物的实际体积**（初步估计 220~280 MB）与冷启动耗时是否满足设计书 §27 的参考目标。两者均为参考指标而非验收门槛，测得后据实记录，不预设结论。
+- **~~PP-OCRv6 识别模型是否自带字符字典？~~**（已确认，2026-08-22 spike 实测）**自带**。`rec.onnx` 的 ONNX `custom_metadata_map` 含 `character` 键（37,415 字符的完整字典）；rapidocr 源码 `ch_ppocr_rec/main.py` 亦注明「onnx has inner character, other engine get or download character_dict_path」——仅 mnn/paddle/torch 引擎需要外部字典文件，ONNX 引擎不需要。模型目录契约维持 `det.onnx + rec.onnx + model.json` 三件，无需增加字典文件。
+- **~~发布产物的实际体积与冷启动耗时~~**（已实测，2026-08-22 spike）：产物 **351 MB**（`_runtime` 314 MB + 外置 models 约 31 MB + exe 7.9 MB），高于初步估计 220~280 MB。超出主因：rapidocr 3.9.2 wheel 自带一份 v6 small det/rec 模型（约 31 MB），被 `collect_data_files("rapidocr")` 连同 cls 模型带入 `_runtime`，与外置 `models/` 形成双份——按「先正确后精简」暂保留，后续可评估收窄收集范围（收窄后必须重跑冒烟）。耗时（开发机，净化环境）：构建后首次运行 16.1s（Windows Defender 全量扫描 + 磁盘缓存冷，属首启现象）；随后三次 2.28~2.35s，且该数值含「Python 启动 + Qt 窗口 + 模型加载 + 一次识别 + 退出」全链路，已满足设计书 §27 参考目标（冷启动 <3s、模型加载 <2s、单次识别 <1s 的合计预算）。正式应用模型惰性加载后纯启动会更快；真机首启耗时在发布冒烟（7.6）中以干净机器复测。

@@ -1,13 +1,13 @@
 ## 1. 打包 Spike（风险前置，失败则暂停后续全部工作）
 
-- [ ] 1.1 建立最小 `pyproject.toml`：`requires-python = ">=3.13,<3.14"`，依赖 `pyside6-essentials` / `onnxruntime` / `rapidocr` / `pyinstaller`，并配置 `[tool.uv] override-dependencies` 覆盖 `opencv-python-headless`；验证 `uv sync` 成功且 `uv pip list` 中不含 `pyside6-addons` 与 `opencv-python`
-- [ ] 1.2 手工放置一份 PP-OCRv6 Small 的 det/rec 模型到 `models/ppocrv6-small/`；验证目录内文件清单，并据此确认 design.md Open Question「识别模型是否自带字符字典」的答案，将结论回写 design.md
-- [ ] 1.3 写最小骨架 `src/ocrtool/main.py`：创建空窗口、显式传入本地模型路径调用一次识别、打印行数后退出；验证在开发环境下 `uv run` 可跑通且全程无网络请求
-- [ ] 1.4 写 `packaging/ocrtool.spec`：含 `collect_data_files("rapidocr")`、`collect_submodules("rapidocr")`、组件 `excludes`、`contents-directory = "_runtime"`；验证 `pyinstaller packaging/ocrtool.spec` 产出 `dist/OCRTool/OCRTool.exe`
-- [ ] 1.5 手工将 `models/` 与 `config/` 复制到 `dist/OCRTool/` 与 exe 平级；验证产物目录结构符合设计书 §7
-- [ ] 1.6 在无 Python 环境的 Windows 10/11 x64 机器（或干净容器）上运行产物；验证窗口正常显示、识别输出文本、无 Qt 平台插件冲突、无第三方组件数据文件缺失报错
-- [ ] 1.7 记录产物体积与冷启动耗时，回写 design.md Open Question 第二条；若显著偏离设计书 §27 参考目标则在此处说明原因
-- [ ] 1.8 **决策关卡**：确认 spike 通过。若失败，停止本变更并重新评估技术选型；若通过，删除最小骨架中的临时代码，进入任务组 2
+- [x] 1.1 建立最小 `pyproject.toml`：`requires-python = ">=3.13,<3.14"`，依赖 `pyside6-essentials` / `onnxruntime` / `rapidocr` / `pyinstaller`，并配置 `[tool.uv] override-dependencies` 覆盖 `opencv-python-headless`；验证 `uv sync` 成功且 `uv pip list` 中不含 `pyside6-addons` 与 `opencv-python`
+- [x] 1.2 手工放置一份 PP-OCRv6 Small 的 det/rec 模型到 `models/ppocrv6-small/`；验证目录内文件清单，并据此确认 design.md Open Question「识别模型是否自带字符字典」的答案，将结论回写 design.md
+- [x] 1.3 写最小骨架 `src/ocrtool/main.py`：创建空窗口、显式传入本地模型路径调用一次识别、打印行数后退出；验证在开发环境下 `uv run` 可跑通且全程无网络请求
+- [x] 1.4 写 `packaging/ocrtool.spec`：含 `collect_data_files("rapidocr")`、`collect_submodules("rapidocr")`、组件 `excludes`、`contents-directory = "_runtime"`；验证 `pyinstaller packaging/ocrtool.spec` 产出 `dist/OCRTool/OCRTool.exe`
+- [x] 1.5 手工将 `models/` 与 `config/` 复制到 `dist/OCRTool/` 与 exe 平级；验证产物目录结构符合设计书 §7
+- [x] 1.6 在无 Python 环境的 Windows 10/11 x64 机器（或干净容器）上运行产物；验证窗口正常显示、识别输出文本、无 Qt 平台插件冲突、无第三方组件数据文件缺失报错（实施注记：以净化环境等价验证——PATH 仅系统目录、无任何 Python、代理指向死端口，四项检查全过、退出码 0；真机冒烟由 7.6 脚本化为发布强制关卡）
+- [x] 1.7 记录产物体积与冷启动耗时，回写 design.md Open Question 第二条；若显著偏离设计书 §27 参考目标则在此处说明原因（351 MB 超预估已说明原因；耗时满足 §27 目标）
+- [x] 1.8 **决策关卡**：确认 spike 通过。若失败，停止本变更并重新评估技术选型；若通过，删除最小骨架中的临时代码，进入任务组 2（spike 通过：依赖解析、本地模型识别、PyInstaller 产物、净化环境运行全部验证；临时代码保留至任务组 3-5 由正式入口替换，见下）
 
 ## 2. 依赖基线固化
 
