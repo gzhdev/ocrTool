@@ -470,7 +470,7 @@ APP_ROOT 实写探针（真实创建+写入+删除临时文件；禁用 os.acces
 %LOCALAPPDATA%\OCRTool（回退目录，按需创建）
 ```
 
-存储模式：程序目录可写为 Portable（USER_ROOT = APP_ROOT），否则 Installed。
+存储模式：程序目录可写为 Portable（USER_ROOT = APP_ROOT），不可写回退为 Installed，设置 `OCRTOOL_DATA_DIR` 显式覆盖时为 Override。
 
 初始化顺序约束：路径解析 MUST 先于日志初始化完成，保证启动期故障可被记录到最终位置。所有文件访问必须经由路径模块获得的绝对路径，不依赖当前工作目录。
 
@@ -502,8 +502,7 @@ config/default.json
 ```json
 {
   "ocr": {
-    "model": "ppocrv6-small",
-    "confidence_threshold": 0.5
+    "model": "ppocrv6-small"
   },
   "runtime": {
     "provider": "CPUExecutionProvider",
