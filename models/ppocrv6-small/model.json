@@ -1,0 +1,14 @@
+{
+  "id": "ppocrv6-small",
+  "name": "PP-OCRv6 Small",
+  "ocr_version": "PP-OCRv6",
+  "description": "标准模式：统一多语种识别模型（中英混合优先），推荐普通桌面电脑",
+  "det_model": "det.onnx",
+  "rec_model": "rec.onnx",
+  "language_coverage": [
+    "zh",
+    "en"
+  ],
+  "note": "PP-OCRv6 识别模型为统一多语种模型；language_coverage 描述该模型覆盖的语种，模型本身不按语种拆分",
+  "recommended": true
+}

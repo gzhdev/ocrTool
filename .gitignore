@@ -251,3 +251,8 @@ cython_debug/
 models/**/*.onnx
 # 模型元数据是模型目录契约的一部分，显式保留入库
 !models/**/model.json
+
+# 开发环境 Portable 模式在项目根产生的可写状态目录
+/data/
+/logs/
+/cache/

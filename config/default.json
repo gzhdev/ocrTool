@@ -1,2 +1,12 @@
 {
+  "ocr": {
+    "model": "ppocrv6-small"
+  },
+  "runtime": {
+    "provider": "CPUExecutionProvider",
+    "cpu_threads": 4
+  },
+  "logging": {
+    "level": "INFO"
+  }
 }
