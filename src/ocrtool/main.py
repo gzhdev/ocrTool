@@ -69,8 +69,19 @@ def _make_sample_image():
     return np.asarray(img)[..., ::-1].copy()
 
 
+def _force_utf8_stdio() -> None:
+    """重定向下 Python 3.13 的 stdout 采用本地 ANSI 代码页 + strict
+    （PEP 686 的 UTF-8 默认要到 3.15，本项目锁 3.13），非 CJK 代码页机器
+    打印中文识别文本会 UnicodeEncodeError，令发布冒烟关卡误判失败；
+    windowed 打包下 stdio 可能为 None，须先判空。"""
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def run_self_test() -> int:
     """端到端自检：本地模型显式路径识别一张中英混合样本图。"""
+    _force_utf8_stdio()
     _startup()
     resolved = model_manager.resolve_model(
         paths.model_dir(), None
