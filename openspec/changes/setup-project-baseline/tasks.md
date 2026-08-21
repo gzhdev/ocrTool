@@ -60,6 +60,6 @@
 
 ## 8. 收尾
 
-- [ ] 8.1 回写 `OCRTool_桌面OCR开发设计书.md` 的 §8（双根路径）、§10（模型目录与 id）、§26（移除方向分类、线程配置映射）、§29（依赖侧断源机制）、§31（改为 spec 单一来源）、§45（升级策略简化）、§57（Python 3.13）；验证文档中不再残留 Python 3.11 与 `use_orientation` 字样
-- [ ] 8.2 编写 README 的开发环境搭建段落（`uv sync` + `fetch_models.ps1` 两步）；验证按文档在干净 checkout 上可从零跑到本地识别成功
-- [ ] 8.3 运行 `openspec validate --strict setup-project-baseline`；验证校验通过
+- [x] 8.1 回写 `OCRTool_桌面OCR开发设计书.md` 的 §8（双根路径）、§10（模型目录与 id）、§26（移除方向分类、线程配置映射）、§29（依赖侧断源机制）、§31（改为 spec 单一来源）、§45（升级策略简化）、§57（Python 3.13）；验证文档中不再残留 Python 3.11 与 `use_orientation` 字样（实施注记：连带修正文档头、§4.1 技术栈表、§7 `python311.dll`、§9.1 默认配置示例、§23.2 示例路径、§41 启动自检清单中的同源失效内容）
+- [x] 8.2 编写 README 的开发环境搭建段落（`uv sync` + `fetch_models.ps1` 两步）；验证按文档在干净 checkout 上可从零跑到本地识别成功（实施注记：临时目录 `git clone` 后按 README 两步执行，死代理下 `--self-test` 输出 SELF-TEST OK、退出码 0）
+- [x] 8.3 运行 `openspec validate --strict setup-project-baseline`；验证校验通过
