@@ -3,7 +3,7 @@
 > 文档版本：v1.0  
 > 目标平台：Windows 10/11 x64  
 > 应用形态：Portable 目录版桌面软件  
-> 技术栈：Python 3.11 + PySide6 + RapidOCR + ONNX Runtime CPU  
+> 技术栈：Python 3.13 + PySide6 + RapidOCR + ONNX Runtime CPU  
 > OCR 模型：PP-OCRv6 Small（默认），PP-OCRv6 Tiny（后续可选）  
 > 打包方式：PyInstaller `onedir`  
 > 文档状态：开发基线设计
@@ -177,7 +177,7 @@ Alt + Shift + A
 
 | 模块 | 技术 |
 |---|---|
-| 开发语言 | Python 3.11 |
+| 开发语言 | Python 3.13 |
 | GUI | PySide6 |
 | OCR 调用 | RapidOCR |
 | 推理运行时 | ONNX Runtime CPU |
@@ -372,7 +372,7 @@ ocr-tool/
 │     └─ main.qss
 │
 ├─ models/
-│  └─ default/
+│  └─ ppocrv6-small/
 │     ├─ det.onnx
 │     ├─ rec.onnx
 │     └─ model.json
@@ -406,7 +406,7 @@ OCRTool/
 ├─ OCRTool.exe
 │
 ├─ models/
-│  └─ default/
+│  └─ ppocrv6-small/
 │     ├─ det.onnx
 │     ├─ rec.onnx
 │     └─ model.json
@@ -423,7 +423,7 @@ OCRTool/
 ├─ cache/
 │
 └─ _runtime/
-   ├─ python311.dll
+   ├─ python313.dll
    ├─ onnxruntime.dll
    ├─ Qt6Core.dll
    ├─ Qt6Gui.dll
@@ -442,54 +442,48 @@ OCRTool/
 所有路径必须通过统一模块处理：
 
 ```text
-app/paths.py
+src/ocrtool/app/paths.py
 ```
 
 禁止在业务代码直接写：
 
 ```python
-"./models/default/det.onnx"
+"./models/ppocrv6-small/det.onnx"
 ```
 
-统一定义：
-
-```python
-APP_ROOT
-RUNTIME_DIR
-MODEL_DIR
-CONFIG_DIR
-DATA_DIR
-LOG_DIR
-CACHE_DIR
-RESOURCE_DIR
-```
-
-逻辑：
+**双根模型**（取代早期的单一 APP_ROOT 设计）：
 
 ```text
-开发环境
-    ↓
-项目根目录
-
-打包环境
-    ↓
-OCRTool.exe 所在目录
+APP_ROOT   只读资源根 = exe 同级（打包）/ 项目根（开发）   -> models/  config/  resources/
+USER_ROOT  可写状态根 = 启动期探测决定                     -> data/    logs/    cache/
 ```
 
-建议接口：
+两者可以指向不同的物理位置：程序被安装到只读位置（Program Files、只读网络盘）时仍能正常运行。
+
+**USER_ROOT 探测顺序**：
+
+```text
+OCRTOOL_DATA_DIR 环境变量（显式覆盖，无效则以明确原因终止启动，不静默回退）
+    ↓ 未设置
+APP_ROOT 实写探针（真实创建+写入+删除临时文件；禁用 os.access——Windows 上它不解析 ACL）
+    ↓ 不可写 → 存储模式 Installed
+%LOCALAPPDATA%\OCRTool（回退目录，按需创建）
+```
+
+存储模式：程序目录可写为 Portable（USER_ROOT = APP_ROOT），否则 Installed。
+
+初始化顺序约束：路径解析 MUST 先于日志初始化完成，保证启动期故障可被记录到最终位置。所有文件访问必须经由路径模块获得的绝对路径，不依赖当前工作目录。
+
+实际接口（已实现）：
 
 ```python
-def get_app_root() -> Path:
-    ...
-
-def get_model_dir() -> Path:
-    ...
-
-def get_user_config_path() -> Path:
-    ...
+paths.initialize() -> PathConfig   # 启动早期调用一次
+paths.app_root() / paths.user_root() / paths.storage_mode()
+paths.model_dir() / paths.default_config_path() / paths.resource_dir()
+paths.data_dir() / paths.user_config_path() / paths.log_dir() / paths.cache_dir()
 ```
 
-所有模块只能通过路径管理器访问文件。
+data / logs / cache 三个子目录在首次访问前按需创建。
 
 ---
 
@@ -508,9 +502,8 @@ config/default.json
 ```json
 {
   "ocr": {
-    "model": "default",
-    "confidence_threshold": 0.5,
-    "use_orientation": true
+    "model": "ppocrv6-small",
+    "confidence_threshold": 0.5
   },
   "runtime": {
     "provider": "CPUExecutionProvider",
@@ -529,6 +522,8 @@ config/default.json
   }
 }
 ```
+
+注意：配置中不存在方向分类（orientation/cls）相关开关——该能力已整体移除，保留开关项会暗示能力可被开启。`ui` / `screenshot` 段随 MVP 界面功能落地，当前基线仅含 `ocr` / `runtime` / `logging`。
 
 ---
 
@@ -580,11 +575,13 @@ data/config.json
 
 ## 10.1 模型目录结构
 
+目录名携带版本信息，`default` 不再是目录名（与「多版本模型并存」矛盾），仅作为解析失败时的回退策略名。
+
 第一版：
 
 ```text
 models/
-└─ default/
+└─ ppocrv6-small/
    ├─ det.onnx
    ├─ rec.onnx
    └─ model.json
@@ -594,68 +591,75 @@ models/
 
 ```text
 models/
-├─ tiny/
+├─ ppocrv6-tiny/
 │  ├─ det.onnx
 │  ├─ rec.onnx
 │  └─ model.json
 │
-└─ small/
+└─ ppocrv7-small/
    ├─ det.onnx
    ├─ rec.onnx
    └─ model.json
 ```
 
+三个概念分离：目录名（文件系统，任意）／唯一键（`model.json` 的 `id`）／当前选择（配置项 `ocr.model`）。模型目录不含方向分类（cls）模型——该能力已整体移除。
+
+模型权重不入版本库（`.gitignore` 排除 `models/**/*.onnx`），由 `scripts/fetch_models.ps1` 依据 `packaging/models.lock.json`（登记上游官方 SHA256）幂等获取；`model.json` 作为契约的一部分保留入库。
+
 ---
 
 ## 10.2 model.json
 
-示例：
+示例（已落地）：
 
 ```json
 {
   "id": "ppocrv6-small",
   "name": "PP-OCRv6 Small",
-  "version": "6",
-  "description": "标准模式，推荐普通桌面电脑",
+  "ocr_version": "PP-OCRv6",
+  "description": "标准模式：统一多语种识别模型（中英混合优先），推荐普通桌面电脑",
   "det_model": "det.onnx",
   "rec_model": "rec.onnx",
-  "languages": [
+  "language_coverage": [
     "zh",
     "en"
   ],
+  "note": "PP-OCRv6 识别模型为统一多语种模型；language_coverage 描述该模型覆盖的语种，模型本身不按语种拆分",
   "recommended": true
 }
 ```
 
+`language_coverage` 取代早期的 `languages` 字段：PP-OCRv6 的识别模型是统一多语种模型，该字段描述「覆盖语种」而非「模型按语种拆分」。识别字典内嵌于 ONNX metadata（`character` 键），模型目录无需独立字典文件。
+
 ---
 
-## 10.3 ModelManager
+## 10.3 模型解析（model_manager）
 
 职责：
 
 ```text
-ModelManager
-│
-├─ scan_models()
-├─ get_model()
-├─ get_default_model()
-├─ validate_model()
-└─ list_models()
+scan_models()       扫描 models/*/model.json，校验完整性与 id 唯一性
+resolve_model()     按回退链解析当前模型
+to_engine_params()  生成引擎构造参数（显式本地路径 + 关闭方向分类，禁用联网下载回退）
 ```
 
-启动时扫描：
+解析回退链：
 
 ```text
-models/*/model.json
+配置指定的 id
+    ↓ 找不到
+recommended: true 的模型（记录 ERROR 日志）
+    ↓ 无推荐
+扫描到的第一个可用模型（目录名排序，保证确定性）
+    ↓ 无任何可用模型
+启动自检失败（程序仍可启动，实际识别时报错）
 ```
 
 校验：
 
-- model.json 是否存在
-- det 模型是否存在
-- rec 模型是否存在
-- JSON 格式是否合法
-- 模型 ID 是否重复
+- model.json 是否存在且可解析
+- det / rec 模型文件是否存在（缺文件的目录不计入可用集，并记录缺失清单）
+- id 是否重复（重复则判定整个模型集合非法，不静默选择其一）
 
 ---
 
@@ -1360,7 +1364,7 @@ OCR 模型文件缺失
 详细信息写入日志：
 
 ```text
-models/default/rec.onnx not found
+models/ppocrv6-small/rec.onnx not found
 ```
 
 UI 不直接显示 Python traceback。
@@ -1491,11 +1495,9 @@ CPUExecutionProvider
 }
 ```
 
-线程数量可根据 CPU 核心数动态决定：
+线程配置映射：`runtime.cpu_threads` 在引擎初始化时映射为 ONNX Runtime 的 `intra_op_num_threads`（接线随 MVP 的 OCRService 落地）；默认值 4，如需可按 `min(4, logical_cpu_count)` 收窄。
 
-```text
-min(4, logical_cpu_count)
-```
+方向分类（cls / orientation）已整体移除：配置中不存在相关开关，引擎构造参数固定 `Global.use_cls: false`，模型目录也不要求 cls 模型文件。
 
 第一阶段不开放 UI 调节线程数。
 
@@ -1569,6 +1571,8 @@ QtWebEngine
 QtMultimedia
 QtQml
 QtQuick
+Qt3D
+QtCharts
 ```
 
 优先只使用：
@@ -1584,6 +1588,14 @@ QtWidgets
 - 发布目录体积
 - DLL 数量
 - 启动时间
+
+**依赖侧断源机制**（取代单纯的「禁止」约定）：
+
+- 依赖 `pyside6-essentials` 而非 `pyside6` 元包——后者会拖入 `pyside6-addons`（+160 MB，含上述全部禁用组件），从依赖声明上断绝来源；
+- rapidocr 传递依赖的 `opencv-python` 通过 uv `override-dependencies` 覆盖为 `opencv-python-headless`（opencv-python 自带 Qt5 平台插件，与 PySide6 同进程会冲突闪退）；
+- `tests/unit/test_dependency_constraints.py` 作为回归红线，环境出现禁止包即测试失败；
+- PyInstaller spec 的 `excludes` 列表作为第二道防线；
+- `scripts/assert_dist.ps1` 在构建产物上断言禁止组件库文件不存在。
 
 ---
 
@@ -1615,27 +1627,30 @@ onefile
 
 # 31. PyInstaller 配置
 
-建议命令：
-
-```powershell
-pyinstaller `
-  --noconfirm `
-  --clean `
-  --onedir `
-  --windowed `
-  --name OCRTool `
-  --icon resources/icons/app.ico `
-  --contents-directory _runtime `
-  src/ocrtool/main.py
-```
-
-正式项目建议使用：
+统一以 spec 文件为单一来源（早期建议的命令行方案已废弃——命令行参数散落且无法版本化评审）：
 
 ```text
 packaging/ocrtool.spec
 ```
 
-固定构建规则。
+构建入口：
+
+```powershell
+uv run pyinstaller packaging/ocrtool.spec --noconfirm --clean
+```
+
+（实际由 `scripts/build.ps1` 调用，不要手工单跑。）
+
+spec 必含契约：
+
+```text
+datas         = collect_data_files("rapidocr")   # config.yaml / default_models.yaml / 自带模型与字典
+hiddenimports = collect_submodules("rapidocr")   # 动态导入的子模块
+excludes      = [WebEngine, Multimedia, Qml, Quick, 3D, Charts, ...]  # 第二道防线
+contents_directory = "_runtime"                  # 参数位于 EXE 对象（COLLECT 会继承）
+```
+
+`models/` 与 `config/` 绝不进入 `datas`：它们必须与 exe 平级（§7），由构建脚本在 PyInstaller 之后复制；若误入 `datas` 会落到 `_runtime/models/` 导致运行期解析失败——`scripts/assert_dist.ps1` 在构建末尾断言其位置。
 
 ---
 
@@ -1895,13 +1910,12 @@ OCR 100 次
 
 # 41. 启动自检
 
-软件启动时执行轻量检查：
+软件启动时执行轻量检查（通过模型扫描与解析完成）：
 
 ```text
 config/default.json
-models/default/model.json
-models/default/det.onnx
-models/default/rec.onnx
+models/*/model.json（描述文件结构校验）
+models/*/det.onnx、rec.onnx（文件存在性）
 ```
 
 不立即加载 ONNX。
@@ -2006,22 +2020,12 @@ OCRTool/
 推荐用户：
 
 ```text
-解压新版本
+解压新版本，整体替换程序目录
 ```
 
-如果需要保留配置：
+无需任何配置迁移：用户配置位于可写状态根（USER_ROOT，见 §8 双根设计），Portable 模式下若用户数据在程序目录内，`data/`、`logs/`、`cache/` 与 exe 平级，整体替换时注意保留这三个目录即可；Installed 模式下用户数据在 `%LOCALAPPDATA%\OCRTool`，与程序目录无关，替换程序目录即完成升级。
 
-```text
-复制 data/config.json
-```
-
-后续可以单独设计：
-
-```text
-data/
-```
-
-为可迁移目录。
+（早期「升级时手工复制 data/config.json」的建议已随双根设计作废。）
 
 ---
 
@@ -2388,7 +2392,7 @@ OCRTool/
 ├─ OCRTool.exe
 │
 ├─ models/
-│  └─ default/
+│  └─ ppocrv6-small/
 │     ├─ det.onnx
 │     ├─ rec.onnx
 │     └─ model.json
@@ -2455,9 +2459,9 @@ Portable 发布稳定
 项目第一阶段最终确定为：
 
 ```text
-Python 3.11
+Python 3.13（requires-python = ">=3.13,<3.14"，上界必须保留：onnxruntime 1.29.0 无 cp314 wheel）
     +
-PySide6
+PySide6（pyside6-essentials，禁用 addons 元包）
     +
 RapidOCR
     +
@@ -2467,7 +2471,7 @@ PP-OCRv6 Small
     +
 QThreadPool
     +
-PyInstaller onedir
+PyInstaller onedir（packaging/ocrtool.spec 单一来源）
 ```
 
 最终软件：
