@@ -51,12 +51,12 @@
 
 ## 7. 构建与发布
 
-- [ ] 7.1 实现 `scripts/build.ps1`（清理 → `uv sync --frozen` → 测试 → PyInstaller → 复制 models/config → 创建 data/logs/cache）；验证从零执行可产出完整的 `dist/OCRTool/`
-- [ ] 7.2 在构建脚本中加入产物结构断言：`models/` 与 `config/` 必须与 exe 平级、不得出现在 `_runtime/` 下；验证故意将 models 打入 `datas` 时该断言会失败
-- [ ] 7.3 在构建脚本中加入禁止组件断言：产物内不存在 WebEngine / Multimedia / Qml / Quick / 3D / Charts 相关库文件；验证断言可执行且当前产物通过
-- [ ] 7.4 实现 `scripts/release.ps1`（build → 冒烟验收 → 清理日志缓存与用户配置 → 打包 ZIP）；验证产出 `OCRTool-<version>-win-x64.zip` 且解压后 logs/cache/data 为空
-- [ ] 7.5 实现版本号单一来源与三处一致性（发布包名、启动日志、界面显示）；验证一致性测试通过
-- [ ] 7.6 将任务 1.6 的冒烟验收流程脚本化为发布强制关卡；验证冒烟失败时 `release.ps1` 以非零码退出且不产出 ZIP
+- [x] 7.1 实现 `scripts/build.ps1`（清理 → `uv sync --frozen` → 测试 → PyInstaller → 复制 models/config → 创建 data/logs/cache）；验证从零执行可产出完整的 `dist/OCRTool/`（实施注记：构建前显式校验模型权重在场，缺失即报「请先运行 fetch_models.ps1」，不静默产出坏包）
+- [x] 7.2 在构建脚本中加入产物结构断言：`models/` 与 `config/` 必须与 exe 平级、不得出现在 `_runtime/` 下；验证故意将 models 打入 `datas` 时该断言会失败（实施注记：断言独立为 `scripts/assert_dist.ps1`，负向验证以伪造 `_runtime/models` 产物树实证退出码 1）
+- [x] 7.3 在构建脚本中加入禁止组件断言：产物内不存在 WebEngine / Multimedia / Qml / Quick / 3D / Charts 相关库文件；验证断言可执行且当前产物通过（负向以伪造 `Qt6WebEngineCore.dll` 实证退出码 1）
+- [x] 7.4 实现 `scripts/release.ps1`（build → 冒烟验收 → 清理日志缓存与用户配置 → 打包 ZIP）；验证产出 `OCRTool-<version>-win-x64.zip` 且解压后 logs/cache/data 为空（实施注记：产出 165 MB ZIP，解压实测三个目录为空；压缩带 3 次重试以对抗杀软短暂锁定 exe）
+- [x] 7.5 实现版本号单一来源与三处一致性（发布包名、启动日志、界面显示）；验证一致性测试通过（单一来源 `src/ocrtool/__init__.py`；三处消费 + pyproject 同步共 5 项测试守护；`--self-test` 为冒烟提供的无 UI 识别路径，正式 UI 随 mvp-image-ocr 落地后标题沿用 `window_title()`）
+- [x] 7.6 将任务 1.6 的冒烟验收流程脚本化为发布强制关卡；验证冒烟失败时 `release.ps1` 以非零码退出且不产出 ZIP（实施注记：删除产物内 det.onnx 实证——冒烟报「无可用模型」退出码 1、dist 内零 ZIP；恢复模型后重跑发布成功。冒烟以死代理环境执行，同时复验零网络依赖）
 
 ## 8. 收尾
 
