@@ -502,7 +502,8 @@ config/default.json
 ```json
 {
   "ocr": {
-    "model": "ppocrv6-small"
+    "model": "ppocrv6-small",
+    "max_edge_px": 6000
   },
   "runtime": {
     "provider": "CPUExecutionProvider",
@@ -1241,8 +1242,8 @@ PP-OCR 本身对普通截图已经具有较好的适应能力。
 
 ```json
 {
-  "image": {
-    "max_dimension": 6000
+  "ocr": {
+    "max_edge_px": 6000
   }
 }
 ```

@@ -1,4 +1,7 @@
-"""OCR 服务层——本项目唯一持有 RapidOCR 实例的位置（spec: ocr-engine）。
+"""OCR 服务层——GUI 识别路径唯一持有 RapidOCR 实例的位置（spec: ocr-engine）。
+
+（`main.py --self-test` 冒烟路径自建实例直连引擎，属基线遗留；迁移至本
+服务层已留档为后续变更。）
 
 职责（design D1）：吸收底层引擎的三件「与业务无关」的差异——
 返回格式差异、None 与空集合的差异、第三方 logger 的接管；

@@ -93,8 +93,7 @@ class OcrController(QObject):
 
     def _on_finished(self, token: int, result: OcrResult) -> None:
         if token != self._token:
-            self._release_worker()
-            return
+            return  # 过期回调：丢弃且不动 _active_worker（它锚定的是新请求）
         if result.line_count == 0:
             self._transition(OcrState.EMPTY)
         else:
@@ -104,8 +103,7 @@ class OcrController(QObject):
 
     def _on_failed(self, token: int, error: OcrError) -> None:
         if token != self._token:
-            self._release_worker()
-            return
+            return  # 同上：释放会拆掉新 worker 的生命周期锚点
         self._transition(OcrState.ERROR)
         self.errorOccurred.emit(error)
         self._finish_cycle()

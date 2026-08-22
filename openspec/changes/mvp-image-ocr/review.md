@@ -78,3 +78,15 @@
 2. 建议 75-2（启动顺序）、75-3（拖放串图）随本次一并修复（均为小改动：一处顺序调整 + 一个 busy 守卫），修复以 `FIX:` 提交或在实现提交前直接改入。
 3. 其余 50/25 分项可留待后续；8 号（spec 冲突）须在本变更归档前于 delta spec 消解。
 4. 实现本体以 `ADD:` 提交（含本 review.md），随后走 openspec-archive-change 归档流程。
+
+## 修复落地记录（2026-08-22）
+
+按上述建议全部落地（10/10，含 25 分项），三笔提交：
+
+| 提交 | 内容 | 验证 |
+|---|---|---|
+| `ADD`（实现本体） | mvp-image-ocr 完整实现 + 本 review.md，46 文件 | 192 测试通过（提交时点） |
+| `FIX` 第一笔 | **100-1**：删除独立 QShortcut；**75-2**：bootstrap 先 `setup_logging()` 再 `load_config()` 再按配置重挂；**75-3**：`load_from_path` 加 busy 守卫（识别中忽略载入并状态提示） | 红-绿实证：三个新回归测试在未修复代码上全部失败（Ctrl+V 双注册 0 次触发、busy 换图串图、损坏配置日志只走 stderr），修复后通过；另以独立对照实验证实双注册下 action 与 QShortcut 均 0 次触发 |
+| `FIX` 第二笔 | **50-4**：`run()` UI 组装段补 try/except + `logger.exception`；**50-5**：过期分支不再 `_release_worker`（与新 worker 锚点冲突）；**50-6**：`dev_e2e_ocr.py` 入口 reconfigure UTF-8；**50-7**：设计书 §20/§9.1 键名改 `ocr.max_edge_px`；**50-8**：delta spec「需要用户介入的错误」移除「配置损坏」，注明遵循 app-config 主规范（状态区提示）——归档前冲突已消解；**50-9**：`service.py` docstring 收窄为「GUI 识别路径唯一持有」；**25-10**：`exceptions.py` docstring 放宽为「完整路径不进界面」 | 全量 195 测试通过（+3 回归）；`openspec validate --strict mvp-image-ocr` 通过 |
+
+留档备注三项维持不动（run_self_test 绕过服务层、按键级测试已随 100-1 补上、resolve_model 双调冗余），归后续变更。

@@ -14,6 +14,12 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+# 输出含中文与 OCR 文本：非 CJK 代码页机器重定向运行会 UnicodeEncodeError
+# （与 main.py _force_utf8_stdio 同模式，review 50-6）
+for stream in (sys.stdout, sys.stderr):
+    if stream is not None:
+        stream.reconfigure(encoding="utf-8", errors="replace")
+
 import numpy as np  # noqa: E402
 from PIL import Image  # noqa: E402
 

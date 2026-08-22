@@ -1,7 +1,8 @@
 """识别过程错误分类（spec: ocr-engine）。
 
-message（异常消息）是用户可读的中文说明；技术细节（路径、原始异常、
-调用栈）只随 detail 与日志流转，绝不进入界面文本。
+message（异常消息）是用户可读的中文说明；技术细节（完整路径、原始异常、
+调用栈）只随 detail 与日志流转，绝不进入界面文本。文件名与扩展名属于
+用户已知信息，允许出现在 message 中。
 """
 
 from __future__ import annotations
