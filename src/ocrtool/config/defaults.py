@@ -19,4 +19,8 @@ BUILTIN_DEFAULTS: dict[str, Any] = {
     "logging": {
         "level": "INFO",
     },
+    "ui": {
+        # 识别成功且检出文本时自动复制（spec: main-window；空结果/失败不写）
+        "auto_copy": True,
+    },
 }

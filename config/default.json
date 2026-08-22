@@ -9,5 +9,8 @@
   },
   "logging": {
     "level": "INFO"
+  },
+  "ui": {
+    "auto_copy": true
   }
 }

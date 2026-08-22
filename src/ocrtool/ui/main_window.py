@@ -57,6 +57,8 @@ class MainWindow(QMainWindow):
         # 当前图像：预览用原图与识别用（可能缩放的）副本分离（design D7）
         self._pending_image: np.ndarray | None = None
         self._pending_scale: float = 1.0
+        # 进行中的截图流程（选区期间保持引用，防止回收）
+        self._capture_flow = None
 
         self.setWindowTitle(window_title())
         self.resize(1000, 680)
@@ -93,6 +95,11 @@ class MainWindow(QMainWindow):
         self._paste_action.setShortcut(QKeySequence.StandardKey.Paste)
         self._paste_action.triggered.connect(self.load_from_clipboard)
         self.addAction(self._paste_action)
+
+        self._capture_action = toolbar.addAction("截图识别")
+        self._capture_action.setShortcut(QKeySequence("Ctrl+Shift+S"))
+        self._capture_action.triggered.connect(self.start_region_capture)
+        self.addAction(self._capture_action)
 
         self._recognize_action = toolbar.addAction("识别")
         self._recognize_action.setShortcut(QKeySequence("Ctrl+R"))
@@ -139,7 +146,7 @@ class MainWindow(QMainWindow):
             self._status.set_state("自检发现问题")
             self._notify_status("；".join(problems))
 
-    # ---- 图像载入（三种输入共用管线，design D8）----
+    # ---- 图像载入（四种输入共用管线，design D8；截图入口见下方独立段）----
 
     def open_file_dialog(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -185,6 +192,38 @@ class MainWindow(QMainWindow):
         self._update_actions()
         self._status.set_state("已载入图像")
 
+    # ---- 截图识别（spec: screen-capture，第四种输入）----
+
+    def start_region_capture(self) -> None:
+        """截图识别入口：隐藏主窗口 → 冻结帧框选 → 裁剪 → 自动识别。"""
+        if self._controller.busy:
+            return  # 入口已禁用，双保险（spec: main-window 识别进行中入口不可用）
+        if self._capture_flow is not None and self._capture_flow.active:
+            return  # 选区进行中不允许重入
+        from ocrtool.capture.region_overlay import RegionCaptureFlow
+
+        flow = RegionCaptureFlow(self)
+        flow.finished.connect(self._on_capture_finished)
+        flow.cancelled.connect(lambda: self._notify_status("已取消截图"))
+        flow.failed.connect(self._on_capture_failed)
+        self._capture_flow = flow
+        flow.start(self)
+
+    def _on_capture_finished(self, image) -> None:
+        """捕获图像与粘贴同路（已是内存 QImage，跳过文件格式校验），
+        完成后自动发起识别——截图是唯一自动触发识别的输入（design D7）。"""
+        if self._controller.busy:
+            self._notify_status("识别进行中，截图结果已丢弃")
+            return
+        bgr = qimage_to_bgr(image)
+        scaled, scale = scale_to_limit(bgr, self._max_edge)
+        self._set_current_image(image, scaled, scale)
+        self.start_recognition()
+
+    def _on_capture_failed(self, message: str) -> None:
+        # 捕获失败是可读提示而非需介入错误（spec: screen-capture）
+        self._notify_status(message)
+
     # ---- 识别 ----
 
     def start_recognition(self) -> None:
@@ -208,6 +247,7 @@ class MainWindow(QMainWindow):
         busy = self._controller.busy
         self._open_action.setEnabled(not busy)
         self._paste_action.setEnabled(not busy)
+        self._capture_action.setEnabled(not busy)
         self._clear_action.setEnabled(not busy)
         self._recognize_action.setEnabled(
             not busy and self._pending_image is not None
@@ -224,6 +264,13 @@ class MainWindow(QMainWindow):
         self._result_panel.set_result(result.text)
         self._status.set_timing(result.elapsed_ms)
         self._status.set_lines(result.line_count)
+        # 自动复制仅在「成功且检出文本」时写剪贴板（design D5）：
+        # 空结果/失败写入空串等于清空用户剪贴板原有内容
+        if result.text.strip() and self._config.get("ui.auto_copy", True):
+            from ocrtool.utils.clipboard import set_clipboard_text
+
+            set_clipboard_text(result.text)
+            self._notify_status("识别结果已自动复制到剪贴板")
 
     def _on_error(self, error) -> None:
         """错误分级（spec: main-window）：需介入 → 对话框；普通反馈 → 状态区。"""

@@ -1,7 +1,9 @@
 """图像输入管线（spec: image-input）。
 
-三种输入（文件选择 / 拖放 / 剪贴板）共用同一条校验与转换路径，无特例
-（design D8）。全程 QImage / ndarray 内存流转，不落任何临时文件。
+四种输入（文件选择 / 拖放 / 剪贴板 / 屏幕捕获）共用同一条转换路径：
+文件途径经双重校验（扩展名 + 可解码），内存途径（剪贴板 / 捕获）由
+程序自身生成 QImage，格式校验不适用。全程 QImage / ndarray 内存流转，
+不落任何临时文件（design D8）。
 """
 
 from __future__ import annotations
