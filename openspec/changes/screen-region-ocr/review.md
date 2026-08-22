@@ -88,3 +88,24 @@ specs/image-input/spec.md:3-5 MODIFIED Requirement 标题保留主规范旧名�
 2. **顺手同批修**：75-1（closeEvent→cancelled，约 5 行）、50-2（append/show 换序 2 行）、50-7（随 100-1 处置）、50-1（deleteLater 1 行）、50-3（补 1 个 keyClick 用例）、50-5（fixture 换 DottedDict）——均为低成本高确定性的修复。
 3. 修复完成后随变更本体一并 `ADD:` 提交（含本 review.md），排除 `.idea/`；50-6 留到归档环节用 RENAMED 处理；25-1 与留档 1/2/3 归后续变更。
 4. 工作区另有的三个纯提案目录（background-residency、model-switching、result-box-overlay）与本实现无耦合，建议与实现分开提交（另起 `ADD:` 规划件提交），保持变更历史可读。
+
+---
+
+## 修复落地记录（2026-08-22）
+
+本体以 `954c848`（ADD: 屏幕区域截图识别与自动复制）入库后，按下节方案以红-绿流程修复。6 个新回归用例在未修复代码上全部失败、失败方式与本报告预测逐字吻合（副屏左半 → 静默取消；副屏右半 → finished 但内容为左偏 640px 的红色；外部关闭 → cancelled 不发射 + active=True + 主窗口不可见；隐藏期异常 → 主窗口不恢复），修复后全量 **246 passed**、`openspec validate --strict` 通过。
+
+| 项 | 修复方式 | 验证 |
+|---|---|---|
+| 100-1 | 选**方向 1**：`RegionOverlay` 在过小判定与 `selectionDone` 发射前把选区 `translated(屏原点)` 转为全局逻辑坐标（尺寸提示同步）；坐标契约统一为「overlay 内部局部、跨模块全局」 | 新增 3 用例：副屏左半（红色 301×201）、副屏右半（蓝色 300×201，释放点 799 夹取含端点）、非原点屏 emit 全局坐标断言；红→绿 |
+| 50-7 | 随方向 1 复活：`_show_overlays` 保存 `_snapshots`，信号接线改为 `_on_selection_done(rect)`（不再 lambda 绑定快照），内部用 `snapshot_at` 按全局 rect 中心定位所在屏；定位失败走 `_abort("截图选区异常")` | `snapshot_at` 恢复生产引用；既有直接调用用例适配新签名 |
+| 75-1 | `RegionOverlay.closeEvent` → `cancelled.emit()`（`_ended` 守卫防递归，注释说明外部关闭语义） | 2 用例：裸 overlay close 发信号；flow 进行中 close → 收尾 + 覆盖层销毁 + 主窗口恢复 + active=False；红→绿 |
+| 50-4 | `_hide_and_wait` 拆两步：`_window_was_visible` 在 `window.hide()` 副作用**之前**落账，返回值改 None | 新用例：monkeypatch `processEvents` 抛异常 → `failed` 发射且主窗口恢复；红→绿 |
+| 50-2 | `_show_overlays` 中 `append` 移到 `show()` 之前 | 结构保证，注释留档 |
+| 50-1 | `_cleanup` 尾部 `self.deleteLater()`（流程对象一次性，结束后自毁） | 既有用例兼容（deleteLater 推迟到事件循环，断言不受影响） |
+| 50-3 | 补 `Ctrl+Shift+S` 按键级用例：FlowStub 替换 `RegionCaptureFlow` 计数创建，`QTest.keyClick` 断言恰好 1 次（0=ambiguous 双注册、>1=重复注册） | 现状即绿（防护缺口闭合，非缺陷修复） |
+| 50-5 | `test_capture_entry` 的 window fixture 换 `DottedDict`，「默认开启」用例恢复对 key 写错的敏感性 | 现状即绿 |
+| 50-6 | 不动 delta spec（标题匹配机制要求），**归档环节**用 RENAMED 处理 image-input 主规范标题 | 归档时执行 |
+| 25-1 | 留档（全局 excepthook 缺失是根因，归后续变更；与基线 `load_from_clipboard` 同模式） | — |
+
+修复提交：`FIX:` 一笔随本记录入库（产品代码 `region_overlay.py` + 测试 3 文件）。

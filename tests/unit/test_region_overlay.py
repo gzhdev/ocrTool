@@ -17,13 +17,13 @@ from ocrtool.capture.screen_capture import ScreenSnapshot  # noqa: E402
 
 
 def make_overlay(
-    qapp, w: int = 800, h: int = 600, dpr: float = 2.0
+    qapp, w: int = 800, h: int = 600, dpr: float = 2.0, x: int = 0, y: int = 0
 ) -> RegionOverlay:
     pixmap = QPixmap(round(w * dpr), round(h * dpr))
     pixmap.fill(QColor(20, 40, 60))
     snapshot = ScreenSnapshot(
         screen_name="fake",
-        geometry=QRect(0, 0, w, h),
+        geometry=QRect(x, y, w, h),
         device_pixel_ratio=dpr,
         pixmap=pixmap,
     )
@@ -67,6 +67,32 @@ class TestSelectionInteraction:
         mouse_press(overlay, 100, 100)
         mouse_move(overlay, 300, 200)
         assert overlay._selection == QRect(100, 100, 201, 101)
+
+    def test_非原点屏选区以全局逻辑坐标发出(self, qapp):
+        """review 100-1：选区信号必须是全局逻辑坐标（局部 + 屏原点）——
+        下游 logical_to_physical 会再减一次屏原点，双重平移使副屏静默取消或裁错。"""
+        overlay = make_overlay(qapp, w=800, h=600, dpr=1.0, x=640, y=0)
+        done: list[QRect] = []
+        overlay.selectionDone.connect(done.append)
+
+        mouse_press(overlay, 100, 100)
+        mouse_release(overlay, 400, 300)
+
+        assert done == [QRect(740, 100, 301, 201)], (
+            f"副屏 (640,0) 上局部 (100,100)-(400,300) 应发出全局 (740,100,301,201)，"
+            f"实际 {done}"
+        )
+
+    def test_覆盖层被外部关闭按取消发出信号(self, qapp):
+        """review 75-1：Alt+F4 / WM_CLOSE 关闭覆盖层不得让流程失去收尾。"""
+        overlay = make_overlay(qapp)
+        cancelled: list[bool] = []
+        overlay.cancelled.connect(lambda: cancelled.append(True))
+
+        overlay.close()
+        qapp.processEvents()
+
+        assert cancelled == [True]
 
 
 class TestCancelSemantics:

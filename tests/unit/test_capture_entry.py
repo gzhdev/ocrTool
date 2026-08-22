@@ -52,11 +52,15 @@ def window(qapp, tmp_path, monkeypatch):
 
     paths.initialize()
     controller = OcrController(FakeService())
-    config = {
-        "ocr": {"model": "x", "max_edge_px": 6000},
-        "runtime": {"cpu_threads": 4},
-        "logging": {"level": "INFO"},
-    }
+    # DottedDict：MainWindow 的配置契约是点路径 get，普通 dict 恒返回默认值，
+    # 会使默认场景（auto_copy 开启）用例对 key 写错不敏感（review 50-5）
+    config = DottedDict(
+        {
+            "ocr": {"model": "x", "max_edge_px": 6000},
+            "runtime": {"cpu_threads": 4},
+            "logging": {"level": "INFO"},
+        }
+    )
     win = MainWindow(controller, config, startup_warnings=[])
     yield win
     paths.reset_for_tests()
@@ -100,6 +104,54 @@ class TestCaptureEntry:
         assert not window._capture_action.isEnabled()
         assert not window._open_action.isEnabled()
         assert not window._paste_action.isEnabled()
+
+    def test_CtrlShiftS按键恰好触发一次截图(self, qapp, tmp_path, monkeypatch):
+        """review 50-3：按键级回归——0 次＝ambiguous 双注册（Ctrl+V 教训），
+        >1 次＝重复注册。"""
+        monkeypatch.setenv("OCRTOOL_DATA_DIR", str(tmp_path / "u-key"))
+        from ocrtool.app import paths
+
+        paths.initialize()
+        from PySide6.QtCore import Qt
+        from PySide6.QtTest import QTest
+
+        import ocrtool.capture.region_overlay as ro_mod
+
+        created: list[object] = []
+
+        class SignalStub:
+            def connect(self, *args, **kwargs) -> None:
+                pass
+
+        class FlowStub:
+            finished = cancelled = failed = SignalStub()
+
+            def __init__(self, parent=None) -> None:
+                created.append(self)
+
+            def start(self, window) -> None:
+                self.started = True
+
+        monkeypatch.setattr(ro_mod, "RegionCaptureFlow", FlowStub)
+        win = MainWindow(
+            OcrController(FakeService()),
+            DottedDict({"ocr": {"model": "x", "max_edge_px": 6000}}),
+            startup_warnings=[],
+        )
+        win.show()
+        qapp.processEvents()  # offscreen 下窗口激活需先处理一轮事件
+
+        QTest.keyClick(
+            win,
+            Qt.Key.Key_S,
+            Qt.KeyboardModifier.ControlModifier
+            | Qt.KeyboardModifier.ShiftModifier,
+        )
+        assert len(created) == 1, (
+            f"Ctrl+Shift+S 应恰好触发一次截图，实际 {len(created)} 次"
+            "（0 次＝快捷键 ambiguous 双注册，>1＝重复注册）"
+        )
+        paths.reset_for_tests()
 
     def test_完成选区自动载入并识别(self, window, qapp, monkeypatch):
         snapshot = patch_capture(monkeypatch)

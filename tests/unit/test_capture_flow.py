@@ -76,6 +76,29 @@ class TestHideAndWait:
         )
         flow._cleanup()
 
+    def test_隐藏等待期异常仍恢复主窗口(self, qapp, monkeypatch):
+        """review 50-4：was_visible 必须在 hide 副作用之前落账——
+        否则等待期异常走到 _cleanup 时读到 False，主窗口永不恢复。"""
+        from PySide6.QtWidgets import QApplication, QWidget
+
+        window = QWidget()
+        window.show()
+        qapp.processEvents()
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("processEvents 崩了")
+
+        monkeypatch.setattr(QApplication, "processEvents", boom)
+        patch_capture(monkeypatch, [make_snapshot()])
+        flow = RegionCaptureFlow()
+        failed: list[str] = []
+        flow.failed.connect(failed.append)
+
+        flow.start(window)
+
+        assert failed == ["截图流程启动失败"]
+        assert window.isVisible(), "隐藏已发生但记录未落账——异常后主窗口必须恢复"
+
     def test_发起前就不可见的窗口保持不可见(self, qapp, monkeypatch):
         window = QWidget()  # 从不 show：windowHandle 为 None
         patch_capture(monkeypatch, [make_snapshot()])
@@ -134,10 +157,99 @@ class TestCompleteAndRestore:
         finished: list[object] = []
         flow.finished.connect(finished.append)
         flow.start(visible_window)
-        flow._on_selection_done(make_snapshot(), QRect(10, 10, 100, 100))
+        flow._on_selection_done(QRect(10, 10, 100, 100))  # 全局坐标（review 100-1）
 
         assert len(finished) == 1
         assert calls == [1], "选区与裁剪阶段不得再次捕获屏幕"
+
+
+class TestNonOriginScreen:
+    """review 100-1 回归：非原点屏（副屏）全链路「框选 → 裁剪 → 内容」。
+
+    合成双屏：主屏 (0,0,640,480) + 副屏 (640,0,800,600)，两屏均左半红右半蓝。
+    overlay 鼠标事件是屏内局部坐标，下游换算是全局逻辑坐标——修复前局部坐标
+    被再减一次屏原点 (640,0)：副屏左半选区整体落屏外 → 静默取消；右半选区
+    → 裁出左偏 640px 的错误区域。
+    """
+
+    @staticmethod
+    def _dual_screen():
+        def two_tone(x: int, y: int, w: int, h: int) -> ScreenSnapshot:
+            snapshot = make_snapshot(x, y, w, h)
+            painter = QPainter(snapshot.pixmap)
+            painter.fillRect(
+                0, 0, snapshot.pixmap.width() // 2, snapshot.pixmap.height(),
+                QColor(200, 30, 40),
+            )
+            painter.fillRect(
+                snapshot.pixmap.width() // 2, 0,
+                snapshot.pixmap.width() - snapshot.pixmap.width() // 2,
+                snapshot.pixmap.height(),
+                QColor(30, 60, 200),
+            )
+            painter.end()
+            return snapshot
+
+        return [two_tone(0, 0, 640, 480), two_tone(640, 0, 800, 600)]
+
+    def _finish_on_secondary(self, qapp, monkeypatch, visible_window, x0, x1):
+        patch_capture(monkeypatch, self._dual_screen())
+        flow = RegionCaptureFlow()
+        finished: list[object] = []
+        cancelled: list[bool] = []
+        flow.finished.connect(finished.append)
+        flow.cancelled.connect(lambda: cancelled.append(True))
+        flow.start(visible_window)
+
+        overlay = flow._overlays[1]  # 副屏覆盖层
+        from qt_helpers import mouse_move, mouse_press, mouse_release
+
+        mouse_press(overlay, x0, 100)
+        mouse_move(overlay, x1, 300)
+        mouse_release(overlay, x1, 300)
+        qapp.processEvents()
+        return finished, cancelled
+
+    def test_副屏左半框选得到正确内容(self, qapp, visible_window, monkeypatch):
+        finished, cancelled = self._finish_on_secondary(
+            qapp, monkeypatch, visible_window, x0=100, x1=400
+        )
+        assert cancelled == [], "副屏有效选区不得被静默取消（review 100-1）"
+        assert len(finished) == 1
+        image = finished[0]
+        assert image.size() == QSize(301, 201)
+        assert image.pixelColor(
+            image.width() // 2, image.height() // 2
+        ).rgb() == QColor(200, 30, 40).rgb(), "副屏左半应为红色"
+
+    def test_副屏右半框选得到正确内容(self, qapp, visible_window, monkeypatch):
+        finished, cancelled = self._finish_on_secondary(
+            qapp, monkeypatch, visible_window, x0=500, x1=800
+        )
+        assert cancelled == []
+        assert len(finished) == 1
+        image = finished[0]
+        # 释放点 800 被夹取到屏内最右列 799：500..799 含端点宽 300
+        assert image.size() == QSize(300, 201)
+        assert image.pixelColor(
+            image.width() // 2, image.height() // 2
+        ).rgb() == QColor(30, 60, 200).rgb(), "副屏右半应为蓝色，左偏 640px 即双重平移"
+
+    def test_覆盖层被外部关闭按取消收尾并恢复主窗口(self, qapp, visible_window, monkeypatch):
+        """review 75-1：选区期间 Alt+F4 → WM_CLOSE 关闭覆盖层，flow 不得僵尸化。"""
+        patch_capture(monkeypatch, [make_snapshot()])
+        flow = RegionCaptureFlow()
+        cancelled: list[bool] = []
+        flow.cancelled.connect(lambda: cancelled.append(True))
+        flow.start(visible_window)
+
+        flow._overlays[0].close()  # 等价 WM_CLOSE 外部关闭
+        qapp.processEvents()
+
+        assert cancelled == [True]
+        assert not flow.active
+        assert flow._overlays == []
+        assert visible_window.isVisible(), "外部关闭后主窗口必须恢复"
 
 
 class TestCancelAndLifecycle:
@@ -199,12 +311,11 @@ class TestCancelAndLifecycle:
         flow.start(visible_window)
         overlay = flow._overlays[0]
 
-        # 完全落在捕获图之外的选区 → 裁剪失败：注入异常路径（任务 3.6）
-        outside = make_snapshot(5000, 5000, 100, 100)
-        flow._on_selection_done(outside, QRect(6000, 6000, 10, 10))
+        # 完全落在所有屏幕之外的选区 → 定位失败：注入异常路径（任务 3.6）
+        flow._on_selection_done(QRect(6000, 6000, 10, 10))
         qapp.processEvents()
 
-        assert failed == ["截图裁剪失败"]
+        assert failed == ["截图选区异常"]
         assert flow._overlays == []
         assert not overlay.isVisible()
         assert visible_window.isVisible()
@@ -233,6 +344,6 @@ class TestCancelAndLifecycle:
         second.start(visible_window)  # 上次取消不得影响新流程（3.7）
         assert len(second._overlays) == 1
         assert not visible_window.isVisible()
-        second._on_selection_done(make_snapshot(), QRect(10, 10, 100, 100))
+        second._on_selection_done(QRect(10, 10, 100, 100))
         assert len(finished) == 1
         assert visible_window.isVisible()
