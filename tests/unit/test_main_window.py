@@ -404,3 +404,70 @@ class TestStartupSelfCheck:
     def test_自检通过显示就绪(self, window):
         assert window._status._state_label.text() in ("就绪", "已载入图像")
         assert window._controller._service.engine_loaded is False
+
+
+class TestShortcutAndBusyGuard:
+    """review 100-1 / 75-3 回归：Ctrl+V 单次触发与 busy 期载入守卫。"""
+
+    def test_CtrlV按键恰好触发一次粘贴(self, qapp, monkeypatch, tmp_path):
+        monkeypatch.setenv("OCRTOOL_DATA_DIR", str(tmp_path / "u"))
+        from ocrtool.app import paths
+
+        paths.initialize()
+        from PySide6.QtCore import Qt
+        from PySide6.QtTest import QTest
+
+        controller = OcrController(FakeService())
+        config = {"ocr": {"model": "x", "max_edge_px": 6000}}
+        win = MainWindow(controller, config, startup_warnings=[])
+        win.show()
+        qapp.processEvents()  # offscreen 下窗口激活需先处理一轮事件
+
+        calls: list[int] = []
+        import ocrtool.utils.clipboard as clipboard_mod
+
+        monkeypatch.setattr(
+            clipboard_mod, "clipboard_image", lambda *a, **k: calls.append(1)
+        )
+        QTest.keyClick(win, Qt.Key.Key_V, Qt.KeyboardModifier.ControlModifier)
+        assert len(calls) == 1, (
+            f"Ctrl+V 应恰好触发一次粘贴，实际 {len(calls)} 次"
+            "（0 次＝快捷键 ambiguous 双注册，>1＝重复注册）"
+        )
+        paths.reset_for_tests()
+
+    def test_识别期间拖入新图被忽略不串图(self, qapp, tmp_path, monkeypatch):
+        monkeypatch.setenv("OCRTOOL_DATA_DIR", str(tmp_path / "u"))
+        from ocrtool.app import paths
+
+        paths.initialize()
+
+        import time
+
+        class SlowRecognize(FakeService):
+            def recognize(self, image, *, scale: float = 1.0):
+                time.sleep(0.2)
+                return make_result()
+
+        controller = OcrController(SlowRecognize())
+        config = {"ocr": {"model": "x", "max_edge_px": 6000}}
+        win = MainWindow(controller, config, startup_warnings=[])
+
+        first = tmp_path / "first.png"
+        Image.new("RGB", (40, 30), "red").save(first)
+        win.load_from_path(first)
+        pending_before = win._pending_image.copy()
+
+        win.start_recognition()
+        qapp.processEvents()
+        assert controller.busy is True
+
+        second = tmp_path / "second.png"
+        Image.new("RGB", (50, 40), "blue").save(second)
+        win.load_from_path(second)  # 识别中拖放/换图：必须被忽略
+
+        assert win._pending_image.shape[:2] == pending_before.shape[:2], (
+            "识别期间换图成功——旧图识别结果将配到新图上（串图）"
+        )
+        process_events_until(qapp, lambda: not controller.busy)
+        paths.reset_for_tests()

@@ -32,6 +32,9 @@ def bootstrap() -> tuple[OCRService, OcrController, object, list[str]]:
     存在性，明确的错误等到用户实际识别时呈现（spec: main-window）。
     """
     paths.initialize()  # PathResolutionError 由调用方转译为用户可读信息
+    # 日志必须先于配置初挂（默认级）：配置加载期的错误（默认配置缺失、
+    # 用户配置损坏）依赖 file handler 落盘（spec: app-config 记录错误日志）
+    app_logging.setup_logging()
     config = config_manager_mod.load_config()
     app_logging.setup_logging(level=config.get("logging.level", "INFO"))
     app_logging.log_startup_environment(
@@ -76,7 +79,12 @@ def run() -> int:
         print(f"启动失败：{exc}", file=sys.stderr)
         return 1
 
-    app = QApplication(sys.argv)
-    window = create_main_window(controller, config, warnings)
-    window.show()
+    try:
+        app = QApplication(sys.argv)
+        window = create_main_window(controller, config, warnings)
+        window.show()
+    except Exception:
+        # UI 组装异常必须有日志防护（还原旧 main.py 行为，review 50-4）
+        logger.exception("启动失败：初始化界面时发生未预期异常")
+        raise
     return app.exec()

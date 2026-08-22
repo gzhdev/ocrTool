@@ -41,3 +41,29 @@ def test_bootstrap_组装后模型未加载(qapp, tmp_path, monkeypatch):
     assert window._controller is controller  # 注入而非新建
     assert service.engine_loaded is False, "窗口组装仍不得触发模型加载"
     paths.reset_for_tests()
+
+
+def test_配置加载期异常日志必须落盘(qapp, tmp_path, monkeypatch):
+    """review 75-2：日志先于配置初始化，损坏配置的错误必须写进 ocrtool.log。
+
+    对照 spec app-config「用户配置文件无法解析 → 记录错误日志」——
+    若先加载配置后挂日志 handler，该条日志只会走 stderr 丢失。
+    """
+    monkeypatch.setenv("OCRTOOL_DATA_DIR", str(tmp_path / "user"))
+    tmp_path.joinpath("user", "data").mkdir(parents=True)
+    (tmp_path / "user" / "data" / "config.json").write_text(
+        "{ 不是合法 JSON", encoding="utf-8"
+    )
+
+    from ocrtool.app import application, paths
+
+    _, _, _, warnings = application.bootstrap()
+    assert warnings, "损坏配置应产生启动警告"
+
+    log_file = paths.log_dir() / "ocrtool.log"
+    assert log_file.exists(), "bootstrap 后日志文件应存在"
+    log_text = log_file.read_text(encoding="utf-8")
+    assert "用户配置文件损坏" in log_text, (
+        "配置加载期的错误日志未落盘——日志初始化晚于配置加载"
+    )
+    paths.reset_for_tests()

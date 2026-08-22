@@ -10,7 +10,7 @@ import logging
 
 import numpy as np
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
     QFileDialog,
     QMainWindow,
@@ -107,9 +107,10 @@ class MainWindow(QMainWindow):
         self._clear_action = toolbar.addAction("清空")
         self._clear_action.triggered.connect(self.clear_all)
 
-        QShortcut(QKeySequence("Ctrl+V"), self).activated.connect(
-            self.load_from_clipboard
-        )
+        # 注意：粘贴快捷键只由 _paste_action（StandardKey.Paste）承担。
+        # 不得再叠加独立 QShortcut——同键序列双注册会被 Qt 判为 ambiguous
+        # overload，两条都不触发（review 100-1），且独立 QShortcut 不受
+        # busy 期禁用控制。
 
         self._viewer.imageDropped.connect(self.load_from_path)
         self._viewer.dropRejected.connect(self._notify_status)
@@ -151,7 +152,14 @@ class MainWindow(QMainWindow):
             self.load_from_path(path)
 
     def load_from_path(self, path) -> None:
-        """文件选择与拖放共用的载入入口；拒绝时当前图像保持不变。"""
+        """文件选择与拖放共用的载入入口；拒绝时当前图像保持不变。
+
+        识别进行中忽略载入（review 75-3）：识别中换图会使旧请求的结果
+        配到新预览上——token 只随识别递增，换图不识别无法作废旧回调。
+        """
+        if self._controller.busy:
+            self._notify_status("识别进行中，请等待完成后更换图像")
+            return
         try:
             original, scaled, scale = load_for_recognition(path, self._max_edge)
         except InvalidImageError as error:
