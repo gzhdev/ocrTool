@@ -1,6 +1,7 @@
 {
   "ocr": {
-    "model": "ppocrv6-small"
+    "model": "ppocrv6-small",
+    "max_edge_px": 6000
   },
   "runtime": {
     "provider": "CPUExecutionProvider",

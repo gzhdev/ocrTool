@@ -10,8 +10,6 @@
 import sys
 import time
 
-from PySide6.QtWidgets import QApplication, QMainWindow
-
 from ocrtool import __version__
 from ocrtool.app import paths
 from ocrtool.config import manager as config_manager_mod
@@ -118,19 +116,9 @@ def main() -> int:
     if "--self-test" in sys.argv[1:]:
         return run_self_test()
 
-    _startup()
+    from ocrtool.app.application import run
 
-    try:
-        app = QApplication(sys.argv)
-        window = QMainWindow()
-        window.setWindowTitle(window_title())
-        window.resize(480, 320)
-        window.show()
-    except Exception:
-        app_logging.get_logger().exception("启动失败：初始化界面时发生未预期异常")
-        raise
-
-    return app.exec()
+    return run()
 
 
 if __name__ == "__main__":

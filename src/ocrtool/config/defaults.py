@@ -10,6 +10,7 @@ from typing import Any
 BUILTIN_DEFAULTS: dict[str, Any] = {
     "ocr": {
         "model": "ppocrv6-small",
+        "max_edge_px": 6000,
     },
     "runtime": {
         "provider": "CPUExecutionProvider",

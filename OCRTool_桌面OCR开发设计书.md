@@ -809,7 +809,10 @@ class OCRResult:
     elapsed_ms: int
     width: int
     height: int
+    scale: float = 1.0
 ```
+
+`scale` 为送入识别的图像相对原始图像的等比缩放比例（见 §20 尺寸上限；未被缩放时为 1.0）。`box` 处于缩放后坐标系，后续绘制识别框（§36）时须除以 `scale` 还原到原始图像坐标系。第一版界面不消费该字段，但自 MVP 起随结果返回（openspec 变更 mvp-image-ocr 的 BREAKING 决定）。
 
 ---
 
@@ -863,6 +866,8 @@ line3
 ```python
 "\n".join(line.text for line in lines)
 ```
+
+空结果分支（mvp-image-ocr 补充）：零行得到空字符串、单行得到该行文本，均无多余换行符；「识别成功但未检出文本」属成功而非错误（状态机进入 EMPTY 态，见 §22）。底层引擎（RapidOCR 3.x）在无检出时 `boxes / txts / scores` 均为 `None` 而非空集合，服务层（OCRService）负责将其规范化为空结果结构，合并逻辑不因此失败。
 
 暂不实现复杂布局重建。
 
@@ -1297,20 +1302,23 @@ IDLE
 LOADING_MODEL
 RUNNING
 SUCCESS
+EMPTY
 ERROR
 ```
+
+`EMPTY`（mvp-image-ocr 新增，BREAKING）：识别成功但未检出任何文本。归入 SUCCESS 会让用户无法区分「没识别出来」与「程序出问题」，归入 ERROR 则对正常输入弹窗过度反应；单列一态，界面反馈为状态区提示「未识别到文本」，不弹对话框。
 
 状态转换：
 
 ```text
 IDLE
  ↓
-LOADING_MODEL
+LOADING_MODEL          （模型已加载则跳过，IDLE → RUNNING）
  ↓
 RUNNING
- ↓
-SUCCESS
- ↓
+ ↓ ↓ ↓
+ SUCCESS  EMPTY  ERROR
+ ↓ ↓ ↓
 IDLE
 ```
 
@@ -1318,6 +1326,16 @@ IDLE
 
 ```text
 RUNNING
+ ↓
+ERROR
+ ↓
+IDLE
+```
+
+加载失败（mvp-image-ocr 补充）：
+
+```text
+LOADING_MODEL
  ↓
 ERROR
  ↓
@@ -1494,7 +1512,7 @@ CPUExecutionProvider
 }
 ```
 
-线程配置映射：`runtime.cpu_threads` 在引擎初始化时映射为 ONNX Runtime 的 `intra_op_num_threads`（接线随 MVP 的 OCRService 落地）；默认值 4，如需可按 `min(4, logical_cpu_count)` 收窄。
+线程配置映射：`runtime.cpu_threads` 由 `OCRService`（`ocr/service.py` 的 `_build_params` + `map_thread_count`）在引擎初始化时映射为 ONNX Runtime 的 `intra_op_num_threads` 与 `inter_op_num_threads`（两者同值）；配置为 0 或负值时传 `-1` 交由推理运行时决定，正值不超过逻辑核心数。默认值 4，如需可按 `min(4, logical_cpu_count)` 收窄。
 
 方向分类（cls / orientation）已整体移除：配置中不存在相关开关，引擎构造参数固定 `Global.use_cls: false`，模型目录也不要求 cls 模型文件。
 
