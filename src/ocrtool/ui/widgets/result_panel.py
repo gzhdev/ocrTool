@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QSignalBlocker, Signal
 from PySide6.QtGui import QColor, QTextCursor, QTextFormat
 from PySide6.QtWidgets import (
     QApplication,
@@ -37,7 +37,17 @@ class ResultPanel(QWidget):
         layout.addWidget(self._copy_button)
 
     def set_result(self, text: str) -> None:
-        self._text_edit.setPlainText(text)
+        """替换结果文本。
+
+        程序性文本操作一律静默（QSignalBlocker）：setPlainText 引起的光标
+        复位是副作用而非用户选择，回流 currentLineChanged 会把联动高亮
+        泄漏到新框列表（review 50-4 的顺序敏感即源于此）。同时旧行高亮
+        必须清除——setPlainText 不清 extraSelections，旧 QTextCursor 会被
+        clamp 到新文档造成高亮漂移（review 75-2）。
+        """
+        with QSignalBlocker(self._text_edit):
+            self._text_edit.setPlainText(text)
+        self.clear_highlight()
 
     @property
     def text(self) -> str:
@@ -53,7 +63,10 @@ class ResultPanel(QWidget):
         self.statusMessage.emit("已复制到剪贴板")
 
     def clear(self) -> None:
-        self._text_edit.setPlainText("")
+        # 静默理由同 set_result：清空的光标复位不得发 currentLineChanged(0)
+        # 把联动索引泄漏为 0（review 50-1）
+        with QSignalBlocker(self._text_edit):
+            self._text_edit.setPlainText("")
         self.clear_highlight()
 
     # ---- 行高亮与联动（spec: main-window 识别框与结果文本联动）----
@@ -61,15 +74,18 @@ class ResultPanel(QWidget):
     def highlight_line(self, index: int) -> None:
         """高亮第 index 行（与 OCRLine 序一致），必要时滚动到可见范围。
 
-        光标同步移至该行：指向位置框时用户视点被引导到对应文本。移动光标
-        会再次触发 currentLineChanged——同索引联动幂等，不构成振荡。
+        指向位置框时用户视点被引导到对应文本，光标同步移至该行；移动必须
+        静默——它是 hover 的程序性副作用，回流 currentLineChanged 会把
+        联动高亮锁死在该行、hover 离开也无法复位（review 75-1）。用户
+        主动点击/键盘移动不走本方法，信号正常发出。
         """
         document = self._text_edit.document()
         if index < 0 or index >= document.blockCount():
             self.clear_highlight()
             return
         cursor = QTextCursor(document.findBlockByNumber(index))
-        self._text_edit.setTextCursor(cursor)
+        with QSignalBlocker(self._text_edit):
+            self._text_edit.setTextCursor(cursor)
         selection = QTextEdit.ExtraSelection()
         selection.format.setBackground(LINE_HIGHLIGHT_COLOR)
         selection.format.setProperty(

@@ -4,7 +4,7 @@
 - 小尺寸图（不触发缩放，scale=1.0）
 - 超过最大边长的大图（识别副本被等比缩小，scale<1.0）
 - 含倾斜文本的图（box 四点非轴对齐）
-- 数百行文本（性能样本，400 行）
+- 数百行文本（性能样本，484 框）
 - 深色与浅色背景图（描边对比度）
 """
 
@@ -433,6 +433,11 @@ class TestLinkage:
         assert window._viewer.hovered_box() == 2
         fire_hover(item, enter=False)
         assert window._viewer.hovered_box() == -1
+        # review 75-1：离开后 pen/brush 必须复位——框侧与文本侧高亮对称
+        assert item.pen().color().rgb() == BOX_PEN_COLOR.rgb()
+        assert item.brush().style() == Qt.BrushStyle.NoBrush
+        assert window._viewer.highlighted_box() == -1
+        assert window._result_panel.highlighted_line() == -1
 
     def test_选中结果行高亮对应位置框(self, qapp, window):
         self._arm(window)
@@ -489,12 +494,84 @@ class TestLinkage:
         assert panel.highlighted_line() == -1
 
 
+# ---- review.md 修复回归（75-1/75-2/50-1/50-2/50-4）----
+
+
+class TestReviewFixes:
+    def test_再次识别后旧行高亮被清除(self, qapp, window):
+        """review 75-2：鼠标停在框上（高亮保持）时再次识别，旧行高亮不得
+        残留漂移——review 实测 setPlainText 不清 extraSelections，旧行
+        QTextCursor 被 clamp 到新文档。"""
+        TestLinkage()._arm(window)
+        fire_hover(window._viewer.box_item(1), enter=True)
+        assert window._result_panel.highlighted_line() == 1
+
+        # hover 保持进入状态，经 Ctrl+R / 粘贴 / 截图流再次识别
+        window._on_result_ready(make_result([
+            ((f, 100.0), (f + 40, 100.0), (f + 40, 130.0), (f, 130.0))
+            for f in (20.0, 80.0, 140.0)
+        ]))
+        assert window._result_panel.highlighted_line() == -1
+
+    def test_clear_all后联动索引不泄漏(self, qapp, window):
+        """review 50-1：clear() 的程序性光标复位不得把联动索引改写为 0。"""
+        TestLinkage()._arm(window)
+        assert window._viewer.highlighted_box() in (-1, 0, 1, 2)
+        window.clear_all()
+        # 全复位契约：无结果、无框、无联动
+        assert window._viewer.box_count() == 0
+        assert window._viewer.highlighted_box() == -1
+
+    def test_识别失败后行高亮被清除(self, qapp, window):
+        """review 50-2：错误路径清框的同时清除文本行高亮，不留孤儿。"""
+        TestLinkage()._arm(window)
+        window._result_panel.highlight_line(1)
+        assert window._result_panel.highlighted_line() == 1
+        from ocrtool.ocr.exceptions import RecognitionError
+
+        window._on_error(RecognitionError("识别失败"))
+        assert window._viewer.box_count() == 0
+        assert window._result_panel.highlighted_line() == -1
+
+    def test_识别完成后联动状态无残留(self, qapp, window):
+        """review 50-4：新结果到达后框 0 不得因 set_result 的程序性信号恒高亮。"""
+        TestLinkage()._arm(window)
+        window._on_result_ready(make_result([
+            ((f, 100.0), (f + 40, 100.0), (f + 40, 130.0), (f, 130.0))
+            for f in (20.0, 80.0, 140.0)
+        ]))
+        assert window._viewer.highlighted_box() == -1
+        for i in range(3):
+            item = window._viewer.box_item(i)
+            assert item.pen().color().rgb() == BOX_PEN_COLOR.rgb(), f"框{i}被程序性信号点亮"
+
+    def test_用户选中的行高亮不被hover离开误清(self, qapp, window):
+        """修复方案的语义约束：hover 离开只清 hover 侧高亮，
+        用户主动选中的行（currentLineChanged 正当来源）保持联动。"""
+        TestLinkage()._arm(window)
+        # 用户点击第 1 行（正当来源）
+        cursor = window._result_panel._text_edit.textCursor()
+        block = window._result_panel._text_edit.document().findBlockByNumber(1)
+        cursor.setPosition(block.position())
+        window._result_panel._text_edit.setTextCursor(cursor)
+        qapp.processEvents()
+        assert window._viewer.highlighted_box() == 1
+
+        # 扫过框 2 再离开——用户选中的框 1 联动不得被误清
+        fire_hover(window._viewer.box_item(2), enter=True)
+        qapp.processEvents()
+        fire_hover(window._viewer.box_item(2), enter=False)
+        qapp.processEvents()
+        assert window._viewer.highlighted_box() == 1
+        assert window._viewer.box_item(1).pen().color().rgb() == BOX_HIGHLIGHT_COLOR.rgb()
+
+
 # ---- 5. 性能 ----
 
 
 class TestPerformance:
     def test_数百框连续缩放平移保持流畅(self, qapp):
-        """5.1：400 行样本，连续缩放+平移+渲染；几何缓存不重建、单帧耗时有上限。"""
+        """5.1：484 框样本，连续缩放+平移+渲染；几何缓存不重建、单帧耗时有上限。"""
         viewer = make_viewer(qapp, image_size=(1200, 900))
         boxes = [
             ((x, y), (x + 60, y), (x + 60, y + 18), (x, y + 18))

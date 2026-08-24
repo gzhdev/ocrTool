@@ -538,7 +538,8 @@ config/default.json
     "cpu_threads": 4
   },
   "ui": {
-    "auto_copy": true
+    "auto_copy": true,
+    "show_boxes": false
   },
   "logging": {
     "level": "INFO"

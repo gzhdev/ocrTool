@@ -303,9 +303,11 @@ class MainWindow(QMainWindow):
         """错误分级（spec: main-window）：需介入 → 对话框；普通反馈 → 状态区。
 
         识别失败同时清除上一次的位置框——结果与框同生命周期，不允许
-        旧框与新错误状态并存（spec: main-window 识别框随结果一并清除）。
+        旧框与新错误状态并存（spec: main-window 识别框随结果一并清除）；
+        文本行高亮同步清除，不留指向已清空联动的孤儿（review 50-2）。
         """
         self._viewer.set_boxes(None)
+        self._result_panel.clear_highlight()
         if isinstance(error, (ModelMissingError, ModelLoadError)):
             self._show_critical_error(error.message)
         else:

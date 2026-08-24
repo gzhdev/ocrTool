@@ -72,3 +72,21 @@
 - 75 分两项建议提交前顺手修（各一行修复 + 补断言；同源于「清除路径只清单侧」，可共用回归测试），或先提交、修复另起一笔 `FIX:` 提交（沿用 mvp/screen-region 先例，修复后在本文档追加修复落地记录）。
 - 50-3/50-4 建议随 75 分修复同批顺手处理（各一行）；50-1/50-2 可留后续。
 - 三个纯提案目录（background-residency、model-switching、result-box-overlay 目录本身如需与实现分开）按既往建议与实现分开提交。
+
+## 修复落地记录（2026-08-24）
+
+评估核实：7 项全部属实，其中 5 项以一次性探针红绿复现实锤（75-1/75-2/50-2/50-4 全链路红、50-1 机制红——`clear()` 实发 `currentLineChanged [0]`），50-3/50-5 文档级 grep 核实。附注：75-1 控件级探针（无 MainWindow 接线）不复现——缺陷藏在信号回环里，佐证报告对机制的归因。
+
+修复采用比 75-1 原方案更优的根治点：**程序性光标移动一律 QSignalBlocker 静默**（`set_result` / `clear` / `highlight_line` 的 setTextCursor/setPlainText），`currentLineChanged` 只反映用户主动移动——一条原则同治 75-1（hover 回环不复位）、50-1（clear 泄漏 0）、50-4（set_result 静默后顺序不再敏感）。报告原方案「hover 离开时复位 `_linked_box`」会误清用户主动的行选中，已用专项回归锁定不回归。
+
+| 项 | 修复 | 验证 |
+|---|---|---|
+| 75-1 | `highlight_line` 光标移动 QSignalBlocker 静默 | 既有用例补 pen/brush/linked/panel 四断言，红→绿 |
+| 75-2 | `set_result` 静默 + `clear_highlight()` | 新回归「hover 保持进入时再次识别，行高亮清除」，红→绿 |
+| 50-1 | `clear` 静默 | 新回归「clear_all 后 `highlighted_box()==-1`」，红→绿 |
+| 50-2 | `_on_error` 补 `clear_highlight()` | 新回归「识别失败后行高亮清除」，红→绿 |
+| 50-4 | `set_result` 静默后顺序不再敏感 | 既有用例补「识别完成后框 0 无程序性点亮」断言（探针证实交换顺序则红）+ 新回归「用户选中的行不被 hover 离开误清」（QSignalBlocker 方案语义锁），红→绿 |
+| 50-3 | 设计书 §9.1 ui 段补 `"show_boxes": false` | grep 清零 |
+| 50-5 | 两处「400 行」→484；`result.py` scale docstring 现状化 | — |
+
+红绿实证：5 用例修复前全红（失败方式与报告预测吻合）、修复后全绿；全量 32 passed（本文件）→ 278 passed（全量，273 + 5 新增）。留档备注三条维持留档不修。
