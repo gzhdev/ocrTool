@@ -60,3 +60,16 @@
 - 75 分两项建议提交前顺手修（75-1 两处补状态回落、75-2 一行改判定+补回归；合计约 5 行代码 + 3 个用例），或先提交、修复另起一笔 `FIX:` 提交（沿用 mvp/screen-region/result-box 先例，修复后在本文档追加修复落地记录）。
 - 50-1/50-2 可随 75 分修复同批顺手处理（各一行级）。
 - 两个 75 分项集中在「切换完成后的 UI 状态收尾」，与五层核心实现（枚举/切换回滚/池任务/排队互斥/菜单入口）质量无关——核心路径的测试密度与实证质量是本变更亮点。
+
+## 修复落地记录（2026-08-24）
+
+实施流程：先 `ADD:` 提交变更本体（e3dec64，19 文件 +1375/−66），后按红绿流程修复（探针复现 → 4 个红用例 → 修复转绿 → 全量回归），另起 `FIX:` 提交。
+
+| 项 | 修复 | 验证（红 → 绿） |
+|---|---|---|
+| 75-1 状态区残留「正在加载模型…」 | `_on_model_switched`/`_on_model_switch_failed` 显式 `set_state(STATE_TEXTS[OcrState.IDLE])`（IDLE-跳过驻留机制为识别终态设计，切换路径必须自行收尾） | 新增 `TestSwitchCompletionState` 两用例：切换成功/失败后 label 断言「就绪」。红：两用例均以 label=='正在加载模型…' 失败；绿：均通过 |
+| 75-2 失败后切换标注错配 | `_on_error` 删除 `_result_model_name = None`——旧结果文本按三代既有行为保留展示，归属标注随之保留（采纳报告推荐方案 A；方案 B 清文本会改变历史行为，未取） | 新增「识别失败后切换_旧文本与标注均保持旧模型」用例（成功→失败→切换→重识别四步）。红：失败于切换后 label=='模型：模型B'（探针预测点）；绿：标注停留「模型A」，重识别后才更新 |
+| 50-1 QActionGroup 累积 | `_model_group` 存为窗口属性，`_rebuild_model_menu` 重建前对旧 group `deleteLater()`（screen-region 5018453 同款模式） | 新增「菜单重建不累积QActionGroup」用例。红：重建 20 次后 20 个 group；绿：恰 1 个。**实施注记**：DeferredDelete 不随 `processEvents()` 派发（Qt 仅在运行中的事件循环处理），测试须显式 `sendPostedEvents(None, QEvent.DeferredDelete)`；生产环境 `app.exec()` 下 deleteLater 自然生效，代码无需特殊处理 |
+| 50-2 docstring 归因错误 | `worker.py` ModelSwitchWorker 与 `controller.py` 模块头改写为「控制器暂存 + 容量 1 池兜底」的准确归因；**额外发现**：`tasks.md` 2.3 注记存在同源错误表述（「在途识别天然先执行完」），一并修正（报告未列，评估阶段核实发现） | 三文件 grep 确认无「天然排队」残留表述；无运行时影响 |
+
+修复未引入新问题：全量 323 passed（319 + 4 新回归用例），改动文件 ruff 全净；`openspec validate --strict model-switching` 通过。

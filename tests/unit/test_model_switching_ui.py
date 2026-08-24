@@ -31,11 +31,17 @@ class SwitchableService:
         self.model_name = model_name
         self.engine_loaded = True
         self.switch_calls: list[str] = []
+        self.fail_next_recognition = False
 
     def preload(self) -> None:  # pragma: no cover - 已加载占位
         pass
 
     def recognize(self, image, *, scale: float = 1.0) -> OcrResult:
+        if self.fail_next_recognition:
+            self.fail_next_recognition = False
+            from ocrtool.ocr.exceptions import RecognitionError
+
+            raise RecognitionError("识别过程发生错误")
         line = OcrLine(text="一行", score=0.9, box=((0, 0), (1, 0), (1, 1), (0, 1)))
         return OcrResult(
             text="一行",
@@ -202,6 +208,53 @@ class TestModelMenu:
             assert service.switch_calls == []
             assert controller.switching is False
 
+    def test_菜单重建不累积QActionGroup(self, qapp, tmp_path, monkeypatch):
+        """50-1：旧 QActionGroup 必须 deleteLater，重建 20 次后仅存当前一个。
+
+        DeferredDelete 不随 processEvents 派发（仅事件循环运行中处理），
+        测试须显式 sendPostedEvents——生产环境 app.exec() 下自然生效。
+        """
+        from PySide6.QtCore import QCoreApplication, QEvent
+        from PySide6.QtGui import QActionGroup
+
+        models = [make_model("id-a", "模型A"), make_model("id-b", "模型B")]
+        for win, controller, service, config in make_window(
+            qapp, tmp_path, monkeypatch, models
+        ):
+            for _ in range(20):
+                win._rebuild_model_menu()
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            assert len(win._model_menu.findChildren(QActionGroup)) == 1
+
+
+class TestSwitchCompletionState:
+    """75-1：切换完成（成功或失败）后状态区文本回落，不残留「正在加载模型…」。
+
+    IDLE-跳过驻留机制是为识别终态（完成/空/失败）设计的；切换路径以
+    LOADING 开始以 IDLE 结束，若回调不显式回落，最后写入的是进行时文本
+    （spec: ocr-execution「切换完成后恢复：状态回到空闲」）。
+    """
+
+    def test_切换成功后状态区回落就绪(self, qapp, tmp_path, monkeypatch):
+        models = [make_model("id-a", "模型A"), make_model("id-b", "模型B")]
+        for win, controller, service, config in make_window(
+            qapp, tmp_path, monkeypatch, models
+        ):
+            run_switch(qapp, controller, make_model("id-b", "模型B"))
+            assert controller.busy is False
+            assert win._status._state_label.text() == "就绪"
+
+    def test_切换失败后状态区回落就绪(self, qapp, tmp_path, monkeypatch):
+        failing = make_model("id-b", "模型B")
+        failing.raise_on_switch = ModelLoadError("模型切换失败，仍在使用原模型")
+        models = [make_model("id-a", "模型A")]
+        for win, controller, service, config in make_window(
+            qapp, tmp_path, monkeypatch, models
+        ):
+            run_switch(qapp, controller, failing)
+            assert controller.busy is False
+            assert win._status._state_label.text() == "就绪"
+
 
 class TestSwitchPersistence:
     """3.1/3.2：切换成功写配置；失败保持不变。"""
@@ -311,6 +364,27 @@ class TestResultModelLabel:
             run_switch(qapp, controller, make_model("id-b", "模型B"))
             assert self.model_label(win) == "模型：模型A"
             win.clear_all()
+            assert self.model_label(win) == "模型：模型B"
+
+    def test_识别失败后切换_旧文本与标注均保持旧模型(self, qapp, tmp_path, monkeypatch):
+        """75-2：失败路径旧结果保留展示（三代历史行为），其归属标注必须
+        同样保留——切换后不得让用户误以为旧文本来自新模型（design D5）。"""
+        models = [make_model("id-a", "模型A"), make_model("id-b", "模型B")]
+        for win, controller, service, config in make_window(
+            qapp, tmp_path, monkeypatch, models
+        ):
+            run_recognition(qapp, controller)
+            assert self.model_label(win) == "模型：模型A"
+            # 再次识别失败：旧文本保留展示是既有行为
+            service.fail_next_recognition = True
+            run_recognition(qapp, controller)
+            assert win._result_panel.text == "一行"
+            # 切换到 B：旧结果的文本与标注都必须停留
+            run_switch(qapp, controller, make_model("id-b", "模型B"))
+            assert self.model_label(win) == "模型：模型A"
+            assert win._result_panel.text == "一行"
+            # 用新模型重新识别成功后标注才更新
+            run_recognition(qapp, controller)
             assert self.model_label(win) == "模型：模型B"
 
 

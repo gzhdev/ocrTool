@@ -121,6 +121,7 @@ class MainWindow(QMainWindow):
         # 重新扫描模型目录（design D4），当前模型打勾标示
         self._model_menu = QMenu(self)
         self._model_menu.aboutToShow.connect(self._rebuild_model_menu)
+        self._model_group: QActionGroup | None = None
         self._model_button = QToolButton()
         self._model_button.setText("模型")
         self._model_button.setToolTip("选择识别模型")
@@ -317,14 +318,20 @@ class MainWindow(QMainWindow):
         from ocrtool.ocr import model_manager
 
         self._model_menu.clear()
+        if self._model_group is not None:
+            # menu.clear() 只移除 action 不释放 group（其 parent 链持有到
+            # 窗口销毁），不显式释放则每次开菜单累积 QObject（review 50-1）
+            self._model_group.deleteLater()
         models = model_manager.available_models(paths.model_dir())
         if not models:
             empty = self._model_menu.addAction("无可用模型")
             empty.setEnabled(False)
+            self._model_group = None
             return
         current_id = self._controller.model_id
         group = QActionGroup(self._model_menu)
         group.setExclusive(True)
+        self._model_group = group
         for info in models:
             action = group.addAction(info.name)
             action.setCheckable(True)
@@ -345,15 +352,22 @@ class MainWindow(QMainWindow):
 
     def _on_model_switched(self, model_id: str, model_name: str) -> None:
         """切换生效：仅成功才写配置（design D6）；模型标注按是否有结果
-        在展示决定——旧结果的产出模型标注不被覆盖（design D5）。"""
+        在展示决定——旧结果的产出模型标注不被覆盖（design D5）。
+
+        状态文本显式回落：切换路径以 LOADING 文本开始，IDLE-跳过驻留机制
+        不会替它收尾，不回落则永久残留「正在加载模型…」（review 75-1）。"""
         self._config.set("ocr.model", model_id)
         self._config.save()
         if self._result_model_name is None:
             self._status.set_model(model_name)
+        self._status.set_state(STATE_TEXTS[OcrState.IDLE])
         self._notify_status(f"模型已切换：{model_name}")
 
     def _on_model_switch_failed(self, error) -> None:
-        """切换未生效：可读提示（error.message 不含技术细节），细节已入日志。"""
+        """切换未生效：可读提示（error.message 不含技术细节），细节已入日志。
+
+        状态文本同样回落（spec: ocr-execution 切换完成后恢复空闲）。"""
+        self._status.set_state(STATE_TEXTS[OcrState.IDLE])
         QMessageBox.warning(self, "OCRTool", error.message)
 
     def _on_result_ready(self, result) -> None:
@@ -380,10 +394,11 @@ class MainWindow(QMainWindow):
         识别失败同时清除上一次的位置框——结果与框同生命周期，不允许
         旧框与新错误状态并存（spec: main-window 识别框随结果一并清除）；
         文本行高亮同步清除，不留指向已清空联动的孤儿（review 50-2）。
+        旧结果文本按三代既有行为保留展示，其产出模型标注随之保留——
+        清空标注会让面板文本与新模型标注错配（review 75-2）。
         """
         self._viewer.set_boxes(None)
         self._result_panel.clear_highlight()
-        self._result_model_name = None
         if isinstance(error, (ModelMissingError, ModelLoadError)):
             self._show_critical_error(error.message)
         else:

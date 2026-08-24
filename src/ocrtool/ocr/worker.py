@@ -59,8 +59,9 @@ class ModelSwitchWorkerSignals(QObject):
 class ModelSwitchWorker(QRunnable):
     """单次模型切换任务（spec: ocr-engine）：在池线程执行引擎替换。
 
-    与识别共用容量 1 的线程池——识别在途时本任务天然排队其后，
-    机制上保证切换不与识别并发进入引擎（design D2）。
+    切换不与识别并发由两层机制共同保证：识别在途时切换请求被控制器
+    暂存（不提交本任务），识别结束后才提交；容量 1 线程池兜底杜绝任何
+    两任务并发进入引擎。design D2 的「等待不取消」语义在控制器实现。
     """
 
     def __init__(self, service, model, token: int) -> None:
