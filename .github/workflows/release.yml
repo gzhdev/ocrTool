@@ -26,12 +26,12 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: 检出仓库（完整历史，用于判断标签是否位于 main）
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: 安装 uv 与 Python 3.13
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.13"
           enable-cache: true
@@ -78,7 +78,7 @@ jobs:
           }
 
       - name: 上传构建产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: OCRTool-win-x64-${{ github.ref_name }}
           path: dist/OCRTool-*-win-x64.zip

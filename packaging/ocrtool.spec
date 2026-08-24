@@ -70,7 +70,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    console=True,
+    console=False,  # GUI 应用：双击启动不得弹出控制台窗口；--self-test 的 stdout 在被管道重定向时仍有效
     disable_windowed_traceback=False,
     contents_directory="_runtime",
 )

@@ -75,7 +75,8 @@ try {
     $zipped = $false
     for ($attempt = 1; $attempt -le 3; $attempt++) {
         try {
-            Compress-Archive -Path $distDir -DestinationPath $zipPath -Force
+            # 通配符压入目录内容而非目录本身：解压后直接见 OCRTool.exe，不嵌套一层
+            Compress-Archive -Path "$distDir/*" -DestinationPath $zipPath -Force
             $zipped = $true
             break
         }
