@@ -21,9 +21,11 @@ class OcrState(Enum):
 
 # design D4 图的每条转换路径；LOADING → ERROR 是图中「错误」汇的自然
 # 延伸：引擎加载失败同样必须进入错误态而非卡在加载态。
+# LOADING → IDLE 为模型切换专属（model-switching）：切换以加载态开始、
+# 以回空闲结束，成功失败皆然（spec: ocr-execution 切换完成后恢复）。
 VALID_TRANSITIONS: dict[OcrState, frozenset[OcrState]] = {
     OcrState.IDLE: frozenset({OcrState.LOADING, OcrState.RECOGNIZING}),
-    OcrState.LOADING: frozenset({OcrState.RECOGNIZING, OcrState.ERROR}),
+    OcrState.LOADING: frozenset({OcrState.RECOGNIZING, OcrState.ERROR, OcrState.IDLE}),
     OcrState.RECOGNIZING: frozenset({OcrState.SUCCESS, OcrState.EMPTY, OcrState.ERROR}),
     OcrState.SUCCESS: frozenset({OcrState.IDLE}),
     OcrState.EMPTY: frozenset({OcrState.IDLE}),

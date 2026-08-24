@@ -162,6 +162,57 @@ class TestEngineParams:
         assert len(params) == 3
 
 
+class TestAvailableModels:
+    """模型枚举（model-switching 任务 1.3-1.6）：重扫描、跳过坏目录、单模型。"""
+
+    def test_多模型全部返回且顺序稳定(self, tmp_path):
+        _write_model_dir(tmp_path, "a", model_id="id-a")
+        _write_model_dir(tmp_path, "b", model_id="id-b", recommended=True)
+        first = model_manager.available_models(tmp_path)
+        second = model_manager.available_models(tmp_path)
+        assert [m.model_id for m in first] == ["id-a", "id-b"]
+        assert [m.model_id for m in second] == [m.model_id for m in first]
+
+    def test_运行期放入新模型后再枚举即可见(self, tmp_path):
+        """1.4：枚举每次重新扫描，新目录无需重启出现。"""
+        _write_model_dir(tmp_path, "a", model_id="id-a")
+        assert [m.model_id for m in model_manager.available_models(tmp_path)] == ["id-a"]
+        _write_model_dir(tmp_path, "b", model_id="id-b")
+        assert [m.model_id for m in model_manager.available_models(tmp_path)] == [
+            "id-a",
+            "id-b",
+        ]
+
+    def test_枚举不做哈希校验_文件损坏仍在列表(self, tmp_path):
+        """spec model-assets：枚举仅确认文件存在，不逐字节校验——
+        获取流程已校验过，枚举对损坏文件保持宽容，识别时才报错。"""
+        directory = _write_model_dir(tmp_path, "a", model_id="id-a")
+        (directory / "det.onnx").write_bytes(b"corrupted-but-present")
+        models = model_manager.available_models(tmp_path)
+        assert [m.model_id for m in models] == ["id-a"]
+
+    def test_不完整目录被跳过并记录日志(self, tmp_path, caplog):
+        """1.5：缺描述文件与模型文件缺失的目录都不出现，且日志含原因。"""
+        _write_model_dir(tmp_path, "good", model_id="id-good")
+        _write_model_dir(tmp_path, "no-desc", with_description=False, with_rec=False)
+        _write_model_dir(tmp_path, "no-rec", with_rec=False)
+        with caplog.at_level("ERROR", logger="ocrtool.ocr"):
+            models = model_manager.available_models(tmp_path)
+        assert [m.model_id for m in models] == ["id-good"]
+        joined = "\n".join(r.message for r in caplog.records)
+        assert "model.json" in joined
+        assert "rec_model=rec.onnx" in joined
+
+    def test_仅一个模型时正常返回不报错(self, tmp_path):
+        """1.6：数量为一不是错误。"""
+        _write_model_dir(tmp_path, "only", model_id="solo")
+        models = model_manager.available_models(tmp_path)
+        assert [m.model_id for m in models] == ["solo"]
+
+    def test_无任何模型返回空列表(self, tmp_path):
+        assert model_manager.available_models(tmp_path) == []
+
+
 class TestLockFileHashes:
     """6.4 models.lock.json 登记的哈希与实际文件一致（本地已落地时）。"""
 

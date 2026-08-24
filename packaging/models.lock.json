@@ -2,6 +2,18 @@
   "rapidocr_version": "3.9.2",
   "source": "SHA256 取自 rapidocr 上游 default_models.yaml（ModelScope 官方登记值），不自行计算",
   "models": {
+    "ppocrv6-tiny": {
+      "det": {
+        "file": "det.onnx",
+        "url": "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2/onnx/PP-OCRv6/det/PP-OCRv6_det_tiny.onnx",
+        "sha256": "f42c0fbd294d95eac1a550e131b277dac97462c8025fa4b6c3cec1b7894bd3d5"
+      },
+      "rec": {
+        "file": "rec.onnx",
+        "url": "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2/onnx/PP-OCRv6/rec/PP-OCRv6_rec_tiny.onnx",
+        "sha256": "e16e242de5937ad92609223f19bc2aff3727ee40b095f996907c24749bad251b"
+      }
+    },
     "ppocrv6-small": {
       "det": {
         "file": "det.onnx",

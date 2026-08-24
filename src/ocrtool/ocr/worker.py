@@ -49,3 +49,38 @@ class OcrWorker(QRunnable):
             self.signals.failed.emit(
                 self._token, RecognitionError("识别过程发生错误", detail=repr(exc))
             )
+
+
+class ModelSwitchWorkerSignals(QObject):
+    switched = Signal(int)  # 切换成功，token 为请求序号
+    failed = Signal(int, object)  # (token, OcrError)
+
+
+class ModelSwitchWorker(QRunnable):
+    """单次模型切换任务（spec: ocr-engine）：在池线程执行引擎替换。
+
+    与识别共用容量 1 的线程池——识别在途时本任务天然排队其后，
+    机制上保证切换不与识别并发进入引擎（design D2）。
+    """
+
+    def __init__(self, service, model, token: int) -> None:
+        super().__init__()
+        self._service = service
+        self._model = model
+        self._token = token
+        self.signals = ModelSwitchWorkerSignals()
+
+    def run(self) -> None:
+        try:
+            self._service.switch_model(self._model)
+            self.signals.switched.emit(self._token)
+        except OcrError as error:
+            self.signals.failed.emit(self._token, error)
+        except Exception as exc:  # 兜底：切换线程同样不让异常逃逸
+            logger.exception("模型切换线程未预期异常")
+            from ocrtool.ocr.exceptions import ModelLoadError
+
+            self.signals.failed.emit(
+                self._token,
+                ModelLoadError("模型切换失败，仍在使用原模型", detail=repr(exc)),
+            )

@@ -1,0 +1,14 @@
+{
+  "id": "ppocrv6-tiny",
+  "name": "PP-OCRv6 Tiny",
+  "ocr_version": "PP-OCRv6",
+  "description": "极速模式：体积与耗时最小的多语种识别模型，适合低配置机器或批量快速取字",
+  "det_model": "det.onnx",
+  "rec_model": "rec.onnx",
+  "language_coverage": [
+    "zh",
+    "en"
+  ],
+  "note": "与 ppocrv6-small 同源的轻量档位；精度略低、速度更快",
+  "recommended": false
+}

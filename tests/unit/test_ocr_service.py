@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -21,8 +20,6 @@ from ocrtool.ocr.exceptions import (
 )
 from ocrtool.ocr.model_manager import ModelInfo
 from ocrtool.ocr.service import OCRService, map_thread_count
-
-import os
 
 
 @dataclass
@@ -47,17 +44,25 @@ class FakeEngine:
         return self.outputs
 
 
-def make_model(tmp_path: Path) -> ModelInfo:
-    det, rec = tmp_path / "det.onnx", tmp_path / "rec.onnx"
+def make_model(
+    tmp_path: Path,
+    *,
+    subdir: str | None = None,
+    model_id: str = "test-model",
+    name: str = "测试模型",
+) -> ModelInfo:
+    directory = tmp_path / subdir if subdir else tmp_path
+    directory.mkdir(parents=True, exist_ok=True)
+    det, rec = directory / "det.onnx", directory / "rec.onnx"
     det.write_bytes(b"det")
     rec.write_bytes(b"rec")
     return ModelInfo(
-        model_id="test-model",
-        directory=tmp_path,
+        model_id=model_id,
+        directory=directory,
         det_path=det,
         rec_path=rec,
-        name="测试模型",
-        recommended=True,
+        name=name,
+        recommended=False,
         language_coverage=("ch", "en"),
         raw={},
     )
@@ -219,6 +224,169 @@ class TestErrorMapping:
         with pytest.raises(RecognitionError):
             service.recognize(image())
         assert len(created) == 1
+
+
+class TestSwitchModel:
+    """模型切换（model-switching 任务 2.1/2.2/2.6/2.7、3.5）：
+    先加载后释放、失败回滚、no-op、未加载仅记录、切换日志。"""
+
+    @staticmethod
+    def _output(text: str = "ok") -> FakeOutput:
+        return FakeOutput(
+            txts=(text,),
+            boxes=(((0, 0), (1, 0), (1, 1), (0, 1)),),
+            scores=(0.9,),
+        )
+
+    def test_切换成功_先加载新后释放旧_识别走新引擎(self, tmp_path):
+        model_a = make_model(tmp_path, subdir="a", model_id="id-a", name="模型A")
+        model_b = make_model(tmp_path, subdir="b", model_id="id-b", name="模型B")
+        engine_a = FakeEngine(self._output("from-a"))
+        engine_b = FakeEngine(self._output("from-b"))
+        engines = {"a": engine_a, "b": engine_b}
+        created: list[str] = []
+
+        def factory(params: dict) -> FakeEngine:
+            det = Path(params["Det.model_path"]).parent.name
+            created.append(det)
+            return engines[det]
+
+        service = OCRService(model_a, engine_factory=factory)
+        assert service.recognize(image()).text == "from-a"
+
+        import gc
+        import weakref
+
+        ref_old = weakref.ref(engine_a)
+        service.switch_model(model_b)
+        assert created == ["a", "b"], "切换必须构造一个新引擎实例"
+        assert service.model_id == "id-b"
+        assert service.model_name == "模型B"
+        assert service.recognize(image()).text == "from-b"
+        engines.pop("a")  # 测试侧残留引用清理，模拟外部无人再持有旧引擎
+        del engine_a
+        gc.collect()
+        assert ref_old() is None, "旧引擎必须被释放，不得残留引用"
+
+    def test_切换后连续识别复用新实例(self, tmp_path):
+        """spec ocr-engine「切换后的复用」：新模型仅切换时加载一次。"""
+        model_a = make_model(tmp_path, subdir="a", model_id="id-a")
+        model_b = make_model(tmp_path, subdir="b", model_id="id-b")
+        engine_b = FakeEngine(self._output())
+        created: list[int] = []
+
+        def factory(params: dict) -> FakeEngine:
+            created.append(1)
+            det = Path(params["Det.model_path"]).parent.name
+            if det == "a":
+                return FakeEngine(self._output())
+            return engine_b
+
+        service = OCRService(model_a, engine_factory=factory)
+        service.recognize(image())
+        service.switch_model(model_b)
+        for _ in range(5):
+            service.recognize(image())
+        assert len(created) == 2, "切换本身加载一次，之后必须复用"
+        assert engine_b.calls == 5
+
+    def test_新模型加载失败_旧引擎原封可用(self, tmp_path):
+        """2.2 失败回滚：不产生新引擎、识别功能不中断、提示可读细节入日志。"""
+        model_a = make_model(tmp_path, subdir="a", model_id="id-a")
+        model_b = make_model(tmp_path, subdir="b", model_id="id-b")
+        engine_a = FakeEngine(self._output("still-a"))
+        created: list[int] = []
+
+        def factory(params: dict) -> FakeEngine:
+            det = Path(params["Det.model_path"]).parent.name
+            if det == "b":
+                raise RuntimeError("onnx corrupted: 0x00FF")
+            created.append(1)
+            return engine_a
+
+        service = OCRService(model_a, engine_factory=factory)
+        service.recognize(image())
+
+        with pytest.raises(ModelLoadError) as exc_info:
+            service.switch_model(model_b)
+        assert "仍在使用原模型" in str(exc_info.value)
+        assert "onnx corrupted" in (exc_info.value.detail or "")
+        assert "onnx corrupted" not in str(exc_info.value)
+        assert service.model_id == "id-a"
+        assert service.recognize(image()).text == "still-a"
+        assert len(created) == 1, "失败路径不得影响旧引擎实例"
+
+    def test_切换到当前模型不重新加载(self, tmp_path):
+        """2.6：目标与当前相同 → 无操作。"""
+        model_a = make_model(tmp_path, subdir="a", model_id="id-a")
+        created: list[int] = []
+
+        def factory(params: dict) -> FakeEngine:
+            created.append(1)
+            return FakeEngine(self._output())
+
+        service = OCRService(model_a, engine_factory=factory)
+        service.recognize(image())
+        service.switch_model(model_a)
+        assert len(created) == 1
+        assert service.recognize(image()).text == "ok"
+
+    def test_未加载任何模型时切换仅记录选择(self, tmp_path):
+        """2.7：保持惰性——切换不触发加载，首次识别才加载且用新模型。"""
+        model_a = make_model(tmp_path, subdir="a", model_id="id-a", name="模型A")
+        model_b = make_model(tmp_path, subdir="b", model_id="id-b", name="模型B")
+        created: list[str] = []
+
+        def factory(params: dict) -> FakeEngine:
+            created.append(Path(params["Det.model_path"]).parent.name)
+            return FakeEngine(self._output("from-b"))
+
+        service = OCRService(model_a, engine_factory=factory)
+        service.switch_model(model_b)
+        assert created == [], "未加载时切换不得触发引擎构造"
+        assert service.engine_loaded is False
+        assert service.model_id == "id-b"
+        assert service.recognize(image()).text == "from-b"
+        assert created == ["b"], "首次识别加载的必须是切换后记录的模型"
+
+    def test_切换日志记录来源目标与耗时(self, tmp_path, caplog):
+        """3.5：来源模型、目标模型与加载耗时都入日志。"""
+        model_a = make_model(tmp_path, subdir="a", model_id="id-a")
+        model_b = make_model(tmp_path, subdir="b", model_id="id-b")
+
+        def factory(params: dict) -> FakeEngine:
+            return FakeEngine(self._output())
+
+        service = OCRService(model_a, engine_factory=factory)
+        service.recognize(image())
+        with caplog.at_level("INFO", logger="ocrtool.ocr"):
+            service.switch_model(model_b)
+        joined = "\n".join(r.getMessage() for r in caplog.records)
+        assert "开始切换模型：id-a → id-b" in joined
+        assert "模型切换完成：id-a → id-b" in joined
+        assert "耗时=" in joined
+
+    def test_失败路径日志含技术细节(self, tmp_path, caplog):
+        model_a = make_model(tmp_path, subdir="a", model_id="id-a")
+        model_b = make_model(tmp_path, subdir="b", model_id="id-b")
+
+        def factory(params: dict) -> FakeEngine:
+            if Path(params["Det.model_path"]).parent.name == "b":
+                raise RuntimeError("bad magic number")
+            return FakeEngine(self._output())
+
+        service = OCRService(model_a, engine_factory=factory)
+        service.recognize(image())
+        with (
+            caplog.at_level("ERROR", logger="ocrtool.ocr"),
+            pytest.raises(ModelLoadError),
+        ):
+            service.switch_model(model_b)
+        # 技术细节随 exc_info（traceback）入日志，不进异常 message
+        assert any(
+            r.exc_info is not None and "bad magic number" in str(r.exc_info[1])
+            for r in caplog.records
+        )
 
 
 class TestNoNetwork:

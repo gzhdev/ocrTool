@@ -779,28 +779,33 @@ OCR
 
 ## 12.1 模型切换
 
-未来支持：
+已支持（openspec 变更 model-switching，2026-08）：
 
 ```text
 Tiny
 Small
 ```
 
-切换：
+切换（顺序已按 model-switching 变更反转：先加载新、成功后释放旧——
+原「先释放后加载」在加载失败时会让程序陷入无引擎可用，只能重启恢复）：
 
 ```text
 用户选择模型
     ↓
-OCRController
+OCRController（识别在途则排队等待，切换期间拒绝新识别）
     ↓
 OCRService.switch_model()
     ↓
+加载新 engine ──失败──▶ 保留旧 engine，提示「仍在使用原模型」，配置不写入
+    ↓ 成功
 释放旧 engine
     ↓
-加载新 engine
-    ↓
-更新配置
+更新配置（仅成功路径写入 ocr.model）
 ```
+
+失败回滚：加载失败时旧引擎原封不动，识别功能不中断，技术细节仅入日志；
+仅切换成功才更新用户配置，失败的选择不会被持久化为常驻噪音。
+切换后已展示的旧结果保留，状态区仍标注其真实产出模型。
 
 切换模型期间 UI 显示：
 
@@ -1821,7 +1826,7 @@ OCRTool 1.0.0
 - [ ] 全局快捷键
 - [x] 自动复制
 - [x] OCR bounding box
-- [ ] Tiny / Small 模型切换
+- [x] Tiny / Small 模型切换
 - [ ] 开机启动
 - [ ] 系统托盘
 - [ ] UI 设置窗口

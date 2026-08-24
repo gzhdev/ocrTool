@@ -1,4 +1,9 @@
-"""状态区（spec: main-window）：模型、状态、耗时、行数。"""
+"""状态区（spec: main-window）：模型、状态、耗时、行数。
+
+模型段的语义是「当前展示结果的产出模型」（model-switching design D5）：
+识别完成时更新为该结果的模型；切换模型后旧结果仍在展示时保持旧标注，
+清空后才跟随当前引擎模型。
+"""
 
 from __future__ import annotations
 

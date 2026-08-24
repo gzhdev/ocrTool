@@ -9,7 +9,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
-import pytest
 from PySide6.QtCore import QRunnable
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # tests/qt_helpers
@@ -40,14 +39,19 @@ def make_result(lines: int = 1) -> OcrResult:
 
 class FakeService:
     def __init__(self, result: OcrResult | None = None, error: Exception | None = None,
-                 delay: float = 0.0) -> None:
+                 delay: float = 0.0, switch_delay: float = 0.0,
+                 switch_error: Exception | None = None) -> None:
         self.model_name = "fake-model"
+        self.model_id = "fake-a"
         self.engine_loaded = False
         self._result = result if result is not None else make_result()
         self._error = error
         self._delay = delay
+        self._switch_delay = switch_delay
+        self._switch_error = switch_error
         self.recognize_calls = 0
         self.load_calls = 0
+        self.switch_calls: list[str] = []
 
     def preload(self) -> None:
         time.sleep(self._delay)
@@ -60,6 +64,14 @@ class FakeService:
         if self._error is not None:
             raise self._error
         return self._result
+
+    def switch_model(self, model) -> None:
+        time.sleep(self._switch_delay)
+        if self._switch_error is not None:
+            raise self._switch_error
+        self.model_id = model.model_id
+        self.model_name = getattr(model, "name", model.model_id)
+        self.switch_calls.append(model.model_id)
 
 
 @dataclass
@@ -157,7 +169,7 @@ class TestTokenInvalidation:
         assert controller.busy is True
 
     def test_过期_loaded_回调被丢弃(self, qapp):
-        controller, observer = make_controller(FakeService(delay=0.01), qapp)
+        controller, _observer = make_controller(FakeService(delay=0.01), qapp)
         controller.start_recognition(image())  # token=1，进入 LOADING
         controller._token = 2
         controller._on_loaded(1)
@@ -211,3 +223,127 @@ class TestStateSequences:
         controller.start_recognition(image())
         process_events_until(qapp, lambda: not controller.busy)
         assert observer.states == [S.LOADING, S.ERROR, S.IDLE]
+
+
+def target_model(model_id: str = "fake-b"):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(model_id=model_id, name=f"模型{model_id}")
+
+
+class TestModelSwitching:
+    """模型切换与识别互斥（model-switching 任务 2.3/2.4）。"""
+
+    def test_空闲时切换_加载态开始_空闲态结束(self, qapp):
+        service = FakeService(switch_delay=0.01)
+        controller, observer = make_controller(service, qapp)
+        switched: list[tuple[str, str]] = []
+        controller.modelSwitched.connect(lambda i, n: switched.append((i, n)))
+
+        assert controller.switch_model(target_model()) is True
+        assert controller.busy is True
+        process_events_until(qapp, lambda: not controller.busy)
+
+        assert switched == [("fake-b", "模型fake-b")]
+        assert observer.states == [S.LOADING, S.IDLE]
+        assert service.switch_calls == ["fake-b"]
+        assert controller.switching is False
+
+    def test_识别在途时切换排队_识别先用旧模型完成(self, qapp):
+        """2.3：在途识别不被取消、正常返回结果，切换随后执行。"""
+        service = FakeService(delay=0.05)
+        controller, observer = make_controller(service, qapp)
+        switched: list[tuple[str, str]] = []
+        controller.modelSwitched.connect(lambda i, n: switched.append((i, n)))
+
+        assert controller.start_recognition(image()) is True
+        assert controller.switch_model(target_model()) is True  # 排队，不被拒
+
+        process_events_until(qapp, lambda: switched and not controller.busy)
+        assert len(observer.results) == 1, "在途识别必须正常返回结果"
+        assert service.recognize_calls == 1
+        assert service.switch_calls == ["fake-b"], "切换在识别完成后才执行"
+        assert observer.states[-3:-1] == [S.IDLE, S.LOADING], "识别结束后接续切换"
+
+    def test_识别在途时切换排队_重复十次无时序竞争(self, qapp):
+        """2.3：交错识别与切换 10 轮，结果与切换一一对应、无错配。"""
+        for round_no in range(10):
+            service = FakeService(delay=0.02, switch_delay=0.01)
+            controller, observer = make_controller(service, qapp)
+            switched: list[str] = []
+            controller.modelSwitched.connect(
+                lambda i, n, sink=switched: sink.append(i)
+            )
+
+            assert controller.start_recognition(image()) is True
+            assert controller.switch_model(target_model(f"m{round_no}")) is True
+            # 排队期间新识别被拒（busy 持续）
+            assert controller.start_recognition(image()) is False
+
+            process_events_until(
+                qapp,
+                lambda sink=switched, c=controller: sink and not c.busy,
+                timeout_s=15,
+            )
+            assert len(observer.results) == 1
+            assert switched == [f"m{round_no}"]
+            assert service.recognize_calls == 1
+            assert controller.state is S.IDLE
+
+    def test_切换期间拒绝新识别_不产生堆积(self, qapp):
+        """2.4：切换进行中识别请求被拒，多次请求不排队堆积。"""
+        service = FakeService(switch_delay=0.05)
+        controller, _observer = make_controller(service, qapp)
+        assert controller.switch_model(target_model()) is True
+
+        for _ in range(5):
+            assert controller.start_recognition(image()) is False
+
+        process_events_until(qapp, lambda: not controller.busy)
+        assert service.recognize_calls == 0, "被拒的请求不得堆积执行"
+        assert controller.start_recognition(image()) is True  # 结束后恢复
+        process_events_until(qapp, lambda: not controller.busy)
+        assert service.recognize_calls == 1
+
+    def test_切换在途拒绝第二个切换请求(self, qapp):
+        service = FakeService(switch_delay=0.05)
+        controller, _ = make_controller(service, qapp)
+        assert controller.switch_model(target_model("first")) is True
+        assert controller.switch_model(target_model("second")) is False
+        process_events_until(qapp, lambda: not controller.busy)
+        assert service.switch_calls == ["first"]
+
+    def test_切换失败_信号发出_状态回空闲_识别仍可用(self, qapp):
+        from ocrtool.ocr.exceptions import ModelLoadError
+
+        service = FakeService(switch_delay=0.01, switch_error=ModelLoadError("切换失败，仍在使用原模型"))
+        controller, observer = make_controller(service, qapp)
+        failures: list[object] = []
+        controller.modelSwitchFailed.connect(failures.append)
+
+        assert controller.switch_model(target_model()) is True
+        process_events_until(qapp, lambda: failures and not controller.busy)
+
+        assert len(failures) == 1
+        assert controller.state is S.IDLE, "失败同样回空闲（spec: ocr-execution）"
+        assert observer.states == [S.LOADING, S.IDLE]
+        # 功能不中断：识别立即可用
+        assert controller.start_recognition(image()) is True
+        process_events_until(qapp, lambda: not controller.busy)
+        assert len(observer.results) == 1
+
+    def test_切换期间_busy_信号只翻转一次(self, qapp):
+        service = FakeService(switch_delay=0.02)
+        controller, observer = make_controller(service, qapp)
+        controller.switch_model(target_model())
+        process_events_until(qapp, lambda: not controller.busy)
+        assert observer.busy_flips == [True, False]
+
+    def test_识别结束接续切换_busy_无闪烁(self, qapp):
+        """排队场景：识别→切换全程 busy，不出现中间释放。"""
+        service = FakeService(delay=0.02)
+        controller, observer = make_controller(service, qapp)
+        controller.start_recognition(image())
+        controller.switch_model(target_model())
+        process_events_until(qapp, lambda: not controller.busy)
+        assert observer.busy_flips == [True, False]

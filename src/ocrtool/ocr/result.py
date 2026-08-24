@@ -7,10 +7,10 @@ rapidocr 已在 2.x → 3.x 破坏性变更过一次，适配必须收敛在服�
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Sequence, Tuple
 
-Point = Tuple[float, float]
+Point = tuple[float, float]
 
 
 @dataclass(frozen=True)
@@ -23,7 +23,7 @@ class OcrLine:
 
     text: str
     score: float
-    box: Tuple[Point, Point, Point, Point]
+    box: tuple[Point, Point, Point, Point]
 
 
 def merge_line_texts(texts: Sequence[str]) -> str:
@@ -42,14 +42,19 @@ class OcrResult:
     小于 1.0）。识别框绘制（result-box-overlay）消费此字段把位置框换算回
     原始图像坐标系——位置框处于缩放后坐标系，不记录该比例会导致绘制时
     整体错位。请勿删除（design D2）。
+
+    model_name：产出该结果的模型展示名称（model-switching）。状态区以它
+    标注「当前结果由哪个模型产出」——切换模型后旧结果仍在展示时，标注
+    必须停留在旧模型上，不得让用户误以为结果来自新模型（design D5）。
     """
 
     text: str
-    lines: Tuple[OcrLine, ...]
+    lines: tuple[OcrLine, ...]
     elapsed_ms: float
     width: int
     height: int
     scale: float = 1.0
+    model_name: str = ""
 
     @property
     def line_count(self) -> int:
@@ -57,8 +62,9 @@ class OcrResult:
 
     @classmethod
     def empty(
-        cls, *, elapsed_ms: float, width: int, height: int, scale: float = 1.0
-    ) -> "OcrResult":
+        cls, *, elapsed_ms: float, width: int, height: int, scale: float = 1.0,
+        model_name: str = "",
+    ) -> OcrResult:
         """空结果（识别成功但未检出文本）——与识别失败严格区分（spec: ocr-engine）。"""
         return cls(
             text="",
@@ -67,4 +73,5 @@ class OcrResult:
             width=width,
             height=height,
             scale=scale,
+            model_name=model_name,
         )

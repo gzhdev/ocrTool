@@ -131,6 +131,20 @@ def scan_models(models_root: Path) -> ScanResult:
     return ScanResult(models=tuple(models), errors=tuple(errors))
 
 
+def available_models(models_root: Path) -> list[ModelInfo]:
+    """枚举全部可用模型（spec: model-assets 枚举可用模型）。
+
+    每次调用都重新扫描：运行期放入新模型后再次请求即可见，无需重启
+    （design D4）。只读描述文件并确认模型文件存在——完整性哈希校验的
+    定位是获取流程的一环（fetch_models），枚举是高频交互操作，不做
+    逐字节校验。不完整目录被跳过并记录日志（含原因）。
+    """
+    result = scan_models(models_root)
+    for error in result.errors:
+        logger.error("模型枚举：%s", error)
+    return list(result.models)
+
+
 def resolve_model(models_root: Path, configured_id: str | None) -> ModelInfo | None:
     """按回退链解析当前模型；无任何可用模型时返回 None（启动自检失败态）。"""
     result = scan_models(models_root)

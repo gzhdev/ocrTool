@@ -10,13 +10,15 @@ import logging
 
 import numpy as np
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QKeySequence
+from PySide6.QtGui import QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
     QFileDialog,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QSplitter,
     QToolBar,
+    QToolButton,
     QWidget,
 )
 
@@ -57,6 +59,9 @@ class MainWindow(QMainWindow):
         # 当前图像：预览用原图与识别用（可能缩放的）副本分离（design D7）
         self._pending_image: np.ndarray | None = None
         self._pending_scale: float = 1.0
+        # 当前展示结果的产出模型（design D5）：None = 无结果在展示，
+        # 状态区模型段此时跟随当前引擎模型；有结果时跟随该结果
+        self._result_model_name: str | None = None
         # 进行中的截图流程（选区期间保持引用，防止回收）
         self._capture_flow = None
 
@@ -112,6 +117,17 @@ class MainWindow(QMainWindow):
         self._boxes_action.setChecked(bool(self._config.get("ui.show_boxes", False)))
         self._boxes_action.toggled.connect(self._toggle_boxes)
 
+        # 模型选择入口（spec: main-window 模型选择入口）：菜单每次呈现前
+        # 重新扫描模型目录（design D4），当前模型打勾标示
+        self._model_menu = QMenu(self)
+        self._model_menu.aboutToShow.connect(self._rebuild_model_menu)
+        self._model_button = QToolButton()
+        self._model_button.setText("模型")
+        self._model_button.setToolTip("选择识别模型")
+        self._model_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._model_button.setMenu(self._model_menu)
+        toolbar.addWidget(self._model_button)
+
         self._copy_action = toolbar.addAction("复制全部")
         self._copy_action.setShortcut(QKeySequence.StandardKey.Copy)
         self._copy_action.triggered.connect(self._result_panel.copy_all)
@@ -137,6 +153,8 @@ class MainWindow(QMainWindow):
         self._controller.busyChanged.connect(self._on_busy_changed)
         self._controller.resultReady.connect(self._on_result_ready)
         self._controller.errorOccurred.connect(self._on_error)
+        self._controller.modelSwitched.connect(self._on_model_switched)
+        self._controller.modelSwitchFailed.connect(self._on_model_switch_failed)
         self._on_busy_changed(False)
 
     # ---- 启动自检（spec: main-window：只查存在性，不加载模型）----
@@ -248,16 +266,23 @@ class MainWindow(QMainWindow):
 
     def _on_busy_changed(self, busy: bool) -> None:
         self._update_actions()
-        if busy:
+        # 切换期间不清运行信息——旧结果（含耗时/行数）保持原样展示
+        # （design D5：不得让用户误以为结果与新模型有关）；识别开始才清
+        if busy and not self._controller.switching:
             self._status.clear_run_info()
 
     def _update_actions(self) -> None:
-        """识别期间禁用触发入口（spec: ocr-execution）；识别入口还需已有图像。"""
+        """识别期间禁用触发入口（spec: ocr-execution）；识别入口还需已有图像。
+
+        模型入口与识别入口同规则禁用（spec: main-window 识别或切换进行中
+        模型选择入口不可用）。
+        """
         busy = self._controller.busy
         self._open_action.setEnabled(not busy)
         self._paste_action.setEnabled(not busy)
         self._capture_action.setEnabled(not busy)
         self._clear_action.setEnabled(not busy)
+        self._model_button.setEnabled(not busy)
         self._recognize_action.setEnabled(
             not busy and self._pending_image is not None
         )
@@ -284,11 +309,61 @@ class MainWindow(QMainWindow):
         else:
             self._result_panel.clear_highlight()
 
+    # ---- 模型切换（spec: main-window 模型选择入口 / 结果标明产出模型）----
+
+    def _rebuild_model_menu(self) -> None:
+        """菜单呈现前重建（design D4）：重新扫描模型目录，放入新模型立即可见。"""
+        from ocrtool.app import paths
+        from ocrtool.ocr import model_manager
+
+        self._model_menu.clear()
+        models = model_manager.available_models(paths.model_dir())
+        if not models:
+            empty = self._model_menu.addAction("无可用模型")
+            empty.setEnabled(False)
+            return
+        current_id = self._controller.model_id
+        group = QActionGroup(self._model_menu)
+        group.setExclusive(True)
+        for info in models:
+            action = group.addAction(info.name)
+            action.setCheckable(True)
+            action.setChecked(info.model_id == current_id)
+            action.triggered.connect(
+                lambda checked=False, target=info: self._request_model_switch(target)
+            )
+            self._model_menu.addAction(action)
+
+    def _request_model_switch(self, info) -> None:
+        """菜单选择 → 请求切换。入口已随 busy 禁用，此处再查是双保险。"""
+        if self._controller.busy or self._controller.switching:
+            self._notify_status("识别或切换进行中，暂不能切换模型")
+            return
+        if info.model_id == self._controller.model_id:
+            return  # 当前模型：直接视为无操作（spec: ocr-engine）
+        self._controller.switch_model(info)
+
+    def _on_model_switched(self, model_id: str, model_name: str) -> None:
+        """切换生效：仅成功才写配置（design D6）；模型标注按是否有结果
+        在展示决定——旧结果的产出模型标注不被覆盖（design D5）。"""
+        self._config.set("ocr.model", model_id)
+        self._config.save()
+        if self._result_model_name is None:
+            self._status.set_model(model_name)
+        self._notify_status(f"模型已切换：{model_name}")
+
+    def _on_model_switch_failed(self, error) -> None:
+        """切换未生效：可读提示（error.message 不含技术细节），细节已入日志。"""
+        QMessageBox.warning(self, "OCRTool", error.message)
+
     def _on_result_ready(self, result) -> None:
         self._result_panel.set_result(result.text)
         # 位置框几何在此一次性还原（÷ scale）并缓存（design D1/D6）；
         # 空结果得到空列表，等价于清除
         self._viewer.set_boxes(polygons_from_result(result))
+        # 状态区模型段 = 本结果的产出模型（design D5）；旧版结果可能缺字段则回退当前引擎
+        self._result_model_name = result.model_name or None
+        self._status.set_model(result.model_name or self._controller.model_name)
         self._status.set_timing(result.elapsed_ms)
         self._status.set_lines(result.line_count)
         # 自动复制仅在「成功且检出文本」时写剪贴板（design D5）：
@@ -308,6 +383,7 @@ class MainWindow(QMainWindow):
         """
         self._viewer.set_boxes(None)
         self._result_panel.clear_highlight()
+        self._result_model_name = None
         if isinstance(error, (ModelMissingError, ModelLoadError)):
             self._show_critical_error(error.message)
         else:
@@ -328,6 +404,8 @@ class MainWindow(QMainWindow):
         self._result_panel.clear()
         self._pending_image = None
         self._pending_scale = 1.0
+        self._result_model_name = None
         self._update_actions()
+        self._status.set_model(self._controller.model_name)
         self._status.set_state(STATE_TEXTS[OcrState.IDLE])
         self._status.clear_run_info()

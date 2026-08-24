@@ -13,8 +13,9 @@ from __future__ import annotations
 import logging
 import os
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 
@@ -64,6 +65,7 @@ class OCRService:
         engine_factory: EngineFactory | None = None,
     ) -> None:
         self._model = model
+        self._cpu_threads = cpu_threads
         self._engine_factory = engine_factory or default_engine_factory
         self._engine_params = self._build_params(model, cpu_threads)
         self._engine: Any | None = None
@@ -94,6 +96,52 @@ class OCRService:
         「加载模型 → 识别中」的分界（spec: ocr-execution）。"""
         self._ensure_engine()
 
+    def switch_model(self, model: ModelInfo) -> None:
+        """切换模型（spec: ocr-engine 模型切换先加载后释放）。
+
+        - 目标与当前模型相同：无操作，MUST NOT 重新加载；
+        - 引擎尚未加载：仅记录选择，保持惰性加载语义；
+        - 已加载：先构造新引擎，成功后才替换并释放旧引擎——失败路径上
+          旧引擎原封不动，识别功能不中断（design D1 反转 §12.1 顺序）。
+        """
+        if model.model_id == self._model.model_id:
+            logger.info("切换目标与当前模型相同，忽略：%s", model.model_id)
+            return
+
+        if self._engine is None:
+            self._model = model
+            self._engine_params = self._build_params(model, self._cpu_threads)
+            logger.info("引擎未加载，仅记录模型选择：%s", model.model_id)
+            return
+
+        params = self._build_params(model, self._cpu_threads)
+        source_id = self._model.model_id
+        logger.info("开始切换模型：%s → %s", source_id, model.model_id)
+        start = time.perf_counter()
+        try:
+            new_engine = self._engine_factory(params)
+        except Exception as exc:
+            # 旧引擎未被动过——回滚即「什么都不做」，继续用原模型工作
+            logger.exception("新模型加载失败，保留旧引擎：%s", model.model_id)
+            raise ModelLoadError(
+                "模型切换失败，仍在使用原模型", detail=repr(exc)
+            ) from exc
+
+        load_ms = (time.perf_counter() - start) * 1000
+        # 引擎初始化可能重挂第三方 logger 的 handler，接管必须在其后重做
+        silence_third_party_loggers()
+        old_engine = self._engine
+        self._engine = new_engine
+        self._model = model
+        self._engine_params = params
+        del old_engine  # 立即释放旧引擎，使内存回落到单模型水平
+        logger.info(
+            "模型切换完成：%s → %s 新引擎加载耗时=%.1fms",
+            source_id,
+            model.model_id,
+            load_ms,
+        )
+
     def recognize(self, image: np.ndarray, *, scale: float = 1.0) -> OcrResult:
         """执行一次识别。输入为 BGR ndarray；scale 由输入层缩放时带入。"""
         if not isinstance(image, np.ndarray) or image.size == 0:
@@ -113,7 +161,10 @@ class OCRService:
             ) from exc
         elapsed_ms = (time.perf_counter() - start) * 1000
 
-        result = self._convert_output(output, elapsed_ms=elapsed_ms, width=width, height=height, scale=scale)
+        result = self._convert_output(
+            output, elapsed_ms=elapsed_ms, width=width, height=height, scale=scale,
+            model_name=self._model.name,
+        )
         log_recognition_summary(
             width=width, height=height, lines=result.line_count, elapsed_ms=elapsed_ms
         )
@@ -160,12 +211,14 @@ class OCRService:
         width: int,
         height: int,
         scale: float,
+        model_name: str = "",
     ) -> OcrResult:
         """RapidOCROutput → OcrResult；None 字段规范化为空集合（spec: ocr-engine）。"""
         txts = list(output.txts) if output is not None and output.txts else []
         if not txts:
             return OcrResult.empty(
-                elapsed_ms=elapsed_ms, width=width, height=height, scale=scale
+                elapsed_ms=elapsed_ms, width=width, height=height, scale=scale,
+                model_name=model_name,
             )
 
         boxes = output.boxes if output.boxes is not None else (None,) * len(txts)
@@ -187,4 +240,5 @@ class OCRService:
             width=width,
             height=height,
             scale=scale,
+            model_name=model_name,
         )

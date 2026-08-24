@@ -3,10 +3,12 @@
 import pytest
 
 from ocrtool.ocr.states import (
-    InvalidStateTransition,
-    OcrState as S,
-    StateMachine,
     VALID_TRANSITIONS,
+    InvalidStateTransition,
+    StateMachine,
+)
+from ocrtool.ocr.states import (
+    OcrState as S,
 )
 
 
@@ -28,6 +30,14 @@ class TestD4Paths:
 
     def test_加载失败直接进入错误(self):
         walk([S.LOADING, S.ERROR, S.IDLE])
+
+    def test_模型切换路径_加载后回空闲(self):
+        """model-switching：切换以加载态开始，成功或失败都以回空闲结束。"""
+        walk([S.LOADING, S.IDLE])
+
+    def test_识别结束后接续切换(self):
+        """在途识别完成后排队切换：成功 → 空闲 → 加载 → 空闲。"""
+        walk([S.LOADING, S.RECOGNIZING, S.SUCCESS, S.IDLE, S.LOADING, S.IDLE])
 
     def test_模型已加载时跳过加载态(self):
         walk([S.RECOGNIZING, S.SUCCESS, S.IDLE])
@@ -56,8 +66,8 @@ class TestForbidden:
             ([], S.EMPTY),  # 空闲 → 空结果
             ([], S.ERROR),  # 空闲 → 错误
             ([S.LOADING], S.SUCCESS),  # 加载 → 成功
-            ([S.LOADING], S.IDLE),  # 加载 → 空闲（必须经识别中或错误）
             ([S.LOADING], S.LOADING),  # 加载 → 加载
+            # 注：加载 → 空闲 已因模型切换成为合法路径（上方切换用例）
             ([S.RECOGNIZING], S.IDLE),  # 识别中 → 空闲
             ([S.RECOGNIZING], S.LOADING),  # 识别中 → 加载
             ([S.LOADING, S.RECOGNIZING, S.SUCCESS], S.RECOGNIZING),  # 成功 → 识别中（须先回空闲）
