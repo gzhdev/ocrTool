@@ -31,7 +31,7 @@ jobs:
           fetch-depth: 0
 
       - name: 安装 uv 与 Python 3.13
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v10
         with:
           python-version: "3.13"
           enable-cache: true
@@ -78,7 +78,7 @@ jobs:
           }
 
       - name: 上传构建产物
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: OCRTool-win-x64-${{ github.ref_name }}
           path: dist/OCRTool-*-win-x64.zip
