@@ -1,6 +1,10 @@
 # GitHub Actions 编译与发布工作流
 #
-# 触发：推送 v* 标签（发布）或手动 workflow_dispatch（仅构建验证）。
+# 触发矩阵（主分支 main 为唯一发布源）：
+#   - push main / dev：构建 + ZIP 产物仅上传为流水线 artifact，不发布
+#   - push v* 标签：构建后发布到 GitHub Release，但仅当标签提交
+#     位于 main 分支上（从 dev 打的标签同样只产出 artifact）
+#   - workflow_dispatch：手动触发，仅构建验证
 # 链路完全复用仓库脚本：fetch_models.ps1（SHA256 校验）→ build.ps1
 # （uv sync --frozen + pytest + PyInstaller + 产物断言）→ release.ps1
 # （--self-test 死 proxy 冒烟关卡 + 打包 OCRTool-<version>-win-x64.zip）。
@@ -10,6 +14,7 @@ name: Build & Release
 
 on:
   push:
+    branches: [main, dev]
     tags: ["v*"]
   workflow_dispatch:
 
@@ -20,8 +25,10 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - name: 检出仓库
+      - name: 检出仓库（完整历史，用于判断标签是否位于 main）
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: 安装 uv 与 Python 3.13
         uses: astral-sh/setup-uv@v5
@@ -56,15 +63,29 @@ jobs:
         shell: pwsh
         run: ./scripts/release.ps1 -SkipBuild
 
+      - name: 确认发布资格（标签提交必须位于 main 分支）
+        id: release_gate
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          git merge-base --is-ancestor $env:GITHUB_SHA origin/main
+          if ($LASTEXITCODE -eq 0) {
+            "eligible=true" >> $env:GITHUB_OUTPUT
+            Write-Host "标签提交位于 main 分支上，允许发布"
+          } else {
+            "eligible=false" >> $env:GITHUB_OUTPUT
+            Write-Host "::warning::标签提交不在 main 分支上，仅产出流水线产物，不发布 Release（主分支 main 为唯一发布源）"
+          }
+
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: OCRTool-win-x64
+          name: OCRTool-win-x64-${{ github.ref_name }}
           path: dist/OCRTool-*-win-x64.zip
           if-no-files-found: error
 
       - name: 发布到 GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') && steps.release_gate.outputs.eligible == 'true'
         uses: softprops/action-gh-release@v2
         with:
           files: dist/OCRTool-*-win-x64.zip
