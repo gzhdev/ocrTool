@@ -1065,10 +1065,18 @@ MainWindow 不关心 RapidOCR API。
 - 鼠标滚轮缩放
 - 拖动查看
 - 接收拖拽图片
-
-未来：
-
 - OCR bounding box 绘制
+
+位置框坐标经**两级变换**还原，两级分离处理、不合并系数（见
+`openspec/changes/result-box-overlay/design.md` D1）：
+
+```text
+OCRLine.box ──(÷ OcrResult.scale，识别完成时一次)──▶ 原始图像坐标（= 场景坐标）
+原始图像坐标 ──(× 视图缩放 + 平移，随用户操作持续变化)──▶ 预览视口坐标
+```
+
+第一级在识别完成时执行一次并缓存几何（`polygons_from_result`）；第二级
+由 QGraphicsView 对场景坐标统一施加，预览缩放/平移时框天然同步。
 
 ---
 
@@ -1811,7 +1819,7 @@ OCRTool 1.0.0
 - [x] 截图 OCR
 - [ ] 全局快捷键
 - [x] 自动复制
-- [ ] OCR bounding box
+- [x] OCR bounding box
 - [ ] Tiny / Small 模型切换
 - [ ] 开机启动
 - [ ] 系统托盘

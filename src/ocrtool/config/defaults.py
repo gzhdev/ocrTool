@@ -22,5 +22,7 @@ BUILTIN_DEFAULTS: dict[str, Any] = {
     "ui": {
         # 识别成功且检出文本时自动复制（spec: main-window；空结果/失败不写）
         "auto_copy": True,
+        # 识别位置框默认关闭——首次使用纯文本视图更简洁（design D5）
+        "show_boxes": False,
     },
 }

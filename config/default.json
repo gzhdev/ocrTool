@@ -11,6 +11,7 @@
     "level": "INFO"
   },
   "ui": {
-    "auto_copy": true
+    "auto_copy": true,
+    "show_boxes": false
   }
 }

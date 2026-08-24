@@ -24,7 +24,7 @@ from ocrtool.controllers.ocr_controller import OcrController
 from ocrtool.main import window_title
 from ocrtool.ocr.exceptions import InvalidImageError, ModelLoadError, ModelMissingError
 from ocrtool.ocr.states import OcrState
-from ocrtool.ui.widgets.image_viewer import ImageViewer
+from ocrtool.ui.widgets.image_viewer import ImageViewer, polygons_from_result
 from ocrtool.ui.widgets.result_panel import ResultPanel
 from ocrtool.ui.widgets.status_widget import StatusWidget
 from ocrtool.utils.image import load_for_recognition, qimage_to_bgr, scale_to_limit
@@ -106,6 +106,12 @@ class MainWindow(QMainWindow):
         self._recognize_action.triggered.connect(self.start_recognition)
         self.addAction(self._recognize_action)
 
+        # 识别框可见性（spec: main-window）：默认关闭，切换即持久化（design D5）
+        self._boxes_action = toolbar.addAction("识别框")
+        self._boxes_action.setCheckable(True)
+        self._boxes_action.setChecked(bool(self._config.get("ui.show_boxes", False)))
+        self._boxes_action.toggled.connect(self._toggle_boxes)
+
         self._copy_action = toolbar.addAction("复制全部")
         self._copy_action.setShortcut(QKeySequence.StandardKey.Copy)
         self._copy_action.triggered.connect(self._result_panel.copy_all)
@@ -121,7 +127,10 @@ class MainWindow(QMainWindow):
 
         self._viewer.imageDropped.connect(self.load_from_path)
         self._viewer.dropRejected.connect(self._notify_status)
+        self._viewer.boxHovered.connect(self._on_box_hover)
         self._result_panel.statusMessage.connect(self._notify_status)
+        self._result_panel.currentLineChanged.connect(self._viewer.set_highlighted_box)
+        self._viewer.set_boxes_visible(self._boxes_action.isChecked())
 
     def _wire_controller(self) -> None:
         self._controller.stateChanged.connect(self._on_state_changed)
@@ -133,8 +142,8 @@ class MainWindow(QMainWindow):
     # ---- 启动自检（spec: main-window：只查存在性，不加载模型）----
 
     def _run_startup_self_check(self, config_warnings: list[str]) -> None:
-        from ocrtool.ocr import model_manager
         from ocrtool.app import paths
+        from ocrtool.ocr import model_manager
 
         problems: list[str] = list(config_warnings)
         model = model_manager.resolve_model(paths.model_dir(), self._config.get("ocr.model"))
@@ -260,8 +269,26 @@ class MainWindow(QMainWindow):
             return
         self._status.set_state(STATE_TEXTS[state])
 
+    # ---- 识别框（spec: main-window 识别框绘制与联动）----
+
+    def _toggle_boxes(self, visible: bool) -> None:
+        """切换识别框可见性并写入用户配置（状态持久化）。"""
+        self._viewer.set_boxes_visible(visible)
+        self._config.set("ui.show_boxes", visible)
+        self._config.save()
+
+    def _on_box_hover(self, index: int) -> None:
+        """指向位置框 → 高亮对应结果行；离开 → 清除高亮。"""
+        if index >= 0:
+            self._result_panel.highlight_line(index)
+        else:
+            self._result_panel.clear_highlight()
+
     def _on_result_ready(self, result) -> None:
         self._result_panel.set_result(result.text)
+        # 位置框几何在此一次性还原（÷ scale）并缓存（design D1/D6）；
+        # 空结果得到空列表，等价于清除
+        self._viewer.set_boxes(polygons_from_result(result))
         self._status.set_timing(result.elapsed_ms)
         self._status.set_lines(result.line_count)
         # 自动复制仅在「成功且检出文本」时写剪贴板（design D5）：
@@ -273,7 +300,12 @@ class MainWindow(QMainWindow):
             self._notify_status("识别结果已自动复制到剪贴板")
 
     def _on_error(self, error) -> None:
-        """错误分级（spec: main-window）：需介入 → 对话框；普通反馈 → 状态区。"""
+        """错误分级（spec: main-window）：需介入 → 对话框；普通反馈 → 状态区。
+
+        识别失败同时清除上一次的位置框——结果与框同生命周期，不允许
+        旧框与新错误状态并存（spec: main-window 识别框随结果一并清除）。
+        """
+        self._viewer.set_boxes(None)
         if isinstance(error, (ModelMissingError, ModelLoadError)):
             self._show_critical_error(error.message)
         else:
