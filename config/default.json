@@ -12,6 +12,15 @@
   },
   "ui": {
     "auto_copy": true,
-    "show_boxes": false
+    "show_boxes": false,
+    "close_to_tray": false,
+    "start_minimized": false,
+    "tray_hint_done": false
+  },
+  "hotkey": {
+    "capture": "Alt+Shift+A"
+  },
+  "system": {
+    "auto_start": false
   }
 }

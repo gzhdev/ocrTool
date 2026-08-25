@@ -9,8 +9,8 @@ from __future__ import annotations
 import logging
 
 import numpy as np
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QActionGroup, QKeySequence
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QActionGroup, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
     QFileDialog,
     QMainWindow,
@@ -44,17 +44,25 @@ STATE_TEXTS = {
 
 
 class MainWindow(QMainWindow):
+    # 用户经任意途径请求退出程序（关闭窗口且不驻留托盘时发射；
+    # application 层统一接线到 QApplication.quit）
+    quitRequested = Signal()
+
     def __init__(
         self,
         controller: OcrController,
         config,
         startup_warnings: list[str] | None = None,
         parent: QWidget | None = None,
+        tray_available: bool = False,
     ) -> None:
         super().__init__(parent)
         self._controller = controller
         self._config = config
         self._max_edge = int(config.get("ocr.max_edge_px", 6000))
+        # 托盘可用性决定关闭窗口的语义分支（spec: system-tray）；
+        # offscreen/无托盘环境下为 False，关闭即退出
+        self._tray_available = tray_available
 
         # 当前图像：预览用原图与识别用（可能缩放的）副本分离（design D7）
         self._pending_image: np.ndarray | None = None
@@ -64,6 +72,8 @@ class MainWindow(QMainWindow):
         self._result_model_name: str | None = None
         # 进行中的截图流程（选区期间保持引用，防止回收）
         self._capture_flow = None
+        # 全局快捷键（application 层组装后注入；None = 本会话未启用热键）
+        self._hotkey = None
 
         self.setWindowTitle(window_title())
         self.resize(1000, 680)
@@ -136,6 +146,10 @@ class MainWindow(QMainWindow):
 
         self._clear_action = toolbar.addAction("清空")
         self._clear_action.triggered.connect(self.clear_all)
+
+        # 快捷键重绑入口（spec: global-hotkey 快捷键可重新绑定）
+        self._hotkey_action = toolbar.addAction("快捷键")
+        self._hotkey_action.triggered.connect(self._open_hotkey_dialog)
 
         # 注意：粘贴快捷键只由 _paste_action（StandardKey.Paste）承担。
         # 不得再叠加独立 QShortcut——同键序列双注册会被 Qt 判为 ambiguous
@@ -424,3 +438,100 @@ class MainWindow(QMainWindow):
         self._status.set_model(self._controller.model_name)
         self._status.set_state(STATE_TEXTS[OcrState.IDLE])
         self._status.clear_run_info()
+
+    # ---- 关闭语义与激活（spec: system-tray / single-instance）----
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """关闭窗口 = 隐藏到托盘（可配置且托盘可用）或退出程序。
+
+        识别进行中不阻止退出：识别在后台线程池，退出流程会等待其完成
+        （spec: system-tray 识别进行中退出）。托盘不可用时永远走退出
+        分支——不能把程序藏进一个不存在的托盘（spec: system-tray 降级）。
+        """
+        if (
+            self._config.get("ui.close_to_tray", False)
+            and self._tray_available
+        ):
+            event.ignore()
+            self._hide_to_tray_with_hint()
+            return
+        event.accept()
+        # quitOnLastWindowClosed 已被显式解除（design D7），退出必须走信号
+        self.quitRequested.emit()
+
+    def bring_to_front(self) -> None:
+        """显示并置前：托盘「显示主窗口」、全局快捷键与二次启动激活共用。
+
+        覆盖三种既有状态（spec: single-instance）：隐藏 → 恢复显示；
+        最小化 → 还原（保留最大化标志）；正常 → 仅置前。
+        """
+        if self.isMinimized():
+            self.setWindowState(
+                self.windowState() & ~Qt.WindowState.WindowMinimized
+            )
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def set_close_to_tray(self, enabled: bool) -> None:
+        """「关闭时驻留托盘」切换 → 持久化（spec: system-tray 关闭行为可配置）。"""
+        self._config.set("ui.close_to_tray", enabled)
+        self._config.save()
+
+    def notify(self, message: str) -> None:
+        """启动期提示（如快捷键注册失败）——状态区呈现，不打断用户。"""
+        self._notify_status(message)
+
+    # ---- 全局快捷键（spec: global-hotkey）----
+
+    def attach_hotkey(self, hotkey) -> None:
+        """注入全局热键控制器并接线触发动作（application 层组装）。"""
+        self._hotkey = hotkey
+        hotkey.triggered.connect(self._on_global_hotkey)
+
+    def _on_global_hotkey(self) -> None:
+        """快捷键触发 = 唤起截图识别（screen-region-ocr 已完成，任务 5.1）。
+
+        先置前再进入截图流程：流程自身会隐藏主窗口截图、结束后恢复，
+        识别结果与状态对用户可见——不把结果静默丢进剪贴板。
+        """
+        self.bring_to_front()
+        self.start_region_capture()
+
+    def _open_hotkey_dialog(self) -> None:
+        from ocrtool.ui.widgets.hotkey_capture_dialog import HotkeyCaptureDialog
+
+        if self._hotkey is None:
+            self._notify_status("本会话未启用全局快捷键")
+            return
+        dialog = HotkeyCaptureDialog(
+            current_text=self._config.get("hotkey.capture", ""), parent=self
+        )
+        if dialog.exec() and dialog.combo is not None:
+            _ok, message = self.apply_hotkey_combo(dialog.combo)
+            self._notify_status(message)
+
+    def apply_hotkey_combo(self, combo) -> tuple[bool, str]:
+        """应用新组合：先注销旧再注册新（rebind）；仅成功才写配置。
+
+        失败时原组合恢复注册且继续生效、配置保持不变
+        （spec: global-hotkey 重新绑定失败）。
+        """
+        ok, message = self._hotkey.rebind(combo)
+        if ok:
+            self._config.set("hotkey.capture", combo.format())
+            self._config.save()
+        return ok, message
+
+    def _hide_to_tray_with_hint(self) -> None:
+        """隐藏到托盘；首次发生时一次性告知程序仍在后台（spec: system-tray）。"""
+        if not self._config.get("ui.tray_hint_done", False):
+            QMessageBox.information(
+                self,
+                "OCRTool",
+                "程序已最小化到系统托盘，仍在后台运行。\n"
+                "单击托盘图标可重新打开窗口；右键托盘图标可选择退出程序。",
+            )
+            self._config.set("ui.tray_hint_done", True)
+            self._config.save()
+        self.hide()

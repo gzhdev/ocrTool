@@ -37,9 +37,10 @@ try {
     uv run pyinstaller packaging/ocrtool.spec --noconfirm --clean
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller 打包失败" }
 
-    # 6 外置资产与 exe 平级（设计书 §7）
+    # 6 外置资产与 exe 平级（设计书 §7）；resources 含托盘图标（任务 2.1）
     Copy-Item models dist/OCRTool/ -Recurse
     Copy-Item config dist/OCRTool/ -Recurse
+    Copy-Item resources dist/OCRTool/ -Recurse
 
     # 7 可写状态目录骨架
     foreach ($name in @("data", "logs", "cache")) {
