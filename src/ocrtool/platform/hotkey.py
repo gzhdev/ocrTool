@@ -6,9 +6,11 @@ design D5 的三条独立理由：隐私（只接触被注册的组合，接触�
 
 实现映射：Win32 RegisterHotKey / UnregisterHotKey（ctypes 直调，
 零第三方依赖）；WM_HOTKEY 经 QAbstractNativeEventFilter 在 Qt 主线程
-消息循环中接收。长按产生的自动重复以时间阈值抑制（spec: 长按不重复
-触发）。黑名单在 :func:`validate_combo`（design D6：用户不该有能力
-通过一次设置把自己的系统弄到不可用）。
+消息循环中接收。长按产生的自动重复以「等待组合释放」状态机抑制——
+触发后 30ms 轮询键态（GetAsyncKeyState），观察到全部键松开才接受下一
+次触发（spec: 长按不重复触发；纯时间阈值会被 Windows 约 500ms 的键盘
+重复延迟绕过）。黑名单在 :func:`validate_combo`（design D6：用户不该
+有能力通过一次设置把自己的系统弄到不可用）。
 """
 
 from __future__ import annotations
@@ -25,6 +27,10 @@ logger = logging.getLogger("ocrtool.platform")
 
 WM_HOTKEY = 0x0312
 ERROR_HOTKEY_ALREADY_REGISTERED = 1409
+
+
+class HotkeyError(ValueError):
+    """组合记名无法映射为可注册的虚拟键（携带可读说明）。"""
 
 # 组合释放的轮询周期：触发后以该周期查询键态，观察到释放才允许
 # 下一次触发（spec: 长按不重复触发）。Windows 键盘重复延迟约 500ms，
@@ -142,7 +148,11 @@ class HotkeyCombo:
         return int(bits)
 
     def native_vk(self) -> int:
-        return _KEY_VK[self.key]
+        try:
+            return _KEY_VK[self.key]
+        except KeyError:
+            # 绕过 parse 构造的组合（如对话框直收符号键）在此兜底
+            raise HotkeyError(f"不支持的主键：{self.key}") from None
 
 
 def validate_combo(combo: HotkeyCombo) -> str | None:
@@ -240,6 +250,13 @@ class GlobalHotkey(QObject):
         if reason is not None:
             self.last_error = reason
             logger.warning("快捷键组合被黑名单拒绝：%s（%s）", combo.format(), reason)
+            return False
+        if combo.key not in _KEY_VK:
+            # 主键存在性前置校验（review 75-1）：黑名单不含未知键（如
+            # 符号键 '!'），必须在注销旧组合之前拦截——否则 rebind 链
+            # 抛未捕获 KeyError，旧热键已丢新热键未注册，静默彻底失效
+            self.last_error = f"不支持的主键：{combo.key}"
+            logger.warning("快捷键主键不受支持：%s", combo.format())
             return False
         if self._combo is not None:
             self.unregister()

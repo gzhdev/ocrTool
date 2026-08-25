@@ -19,6 +19,9 @@ if (-not (Test-Path (Join-Path $DistDir "models"))) {
 if (-not (Test-Path (Join-Path $DistDir "config"))) {
     throw "结构断言失败：config/ 必须与 exe 平级（$DistDir\config）"
 }
+if (-not (Test-Path (Join-Path $DistDir "resources/icons/tray-256.png"))) {
+    throw "结构断言失败：resources/icons/ 托盘图标必须与 exe 平级（$DistDir\resources\icons）"
+}
 foreach ($runtimeSub in @("models", "config")) {
     $misplaced = Join-Path $DistDir "_runtime/$runtimeSub"
     if (Test-Path $misplaced) {

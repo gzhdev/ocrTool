@@ -12,7 +12,7 @@ import ctypes
 from ctypes import wintypes
 
 import pytest
-from PySide6.QtCore import QEvent
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import QApplication
 
@@ -260,3 +260,78 @@ class TestCaptureDialog:
         dialog.show()
         self._press(dialog, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier)
         assert dialog.combo is None
+
+
+class TestSymbolKeyNormalization:
+    """review 75-1：Shift+数字在 event.key() 层是符号键（Key_Exclam 等），
+    必须映射回 unshifted 数字主键，否则构造绕过校验、rebind 链 KeyError。"""
+
+    def _press(self, dialog, key, modifiers):
+        event = QKeyEvent(QEvent.Type.KeyPress, key, modifiers)
+        QApplication.postEvent(dialog, event)
+        QApplication.processEvents()
+
+    def _capture(self, qapp, key, modifiers):
+        dialog = HotkeyCaptureDialog(current_text="Alt+Shift+A")
+        dialog.show()
+        self._press(dialog, key, modifiers)
+        return dialog
+
+    @pytest.mark.parametrize(
+        ("key", "digit"),
+        [
+            (Qt.Key.Key_Exclam, "1"),
+            (Qt.Key.Key_At, "2"),
+            (Qt.Key.Key_NumberSign, "3"),
+            (Qt.Key.Key_Dollar, "4"),
+            (Qt.Key.Key_Percent, "5"),
+            (Qt.Key.Key_AsciiCircum, "6"),
+            (Qt.Key.Key_Ampersand, "7"),
+            (Qt.Key.Key_Asterisk, "8"),
+            (Qt.Key.Key_ParenLeft, "9"),
+            (Qt.Key.Key_ParenRight, "0"),
+        ],
+    )
+    def test_shift数字符号键映射回数字主键(self, qapp, key, digit):
+        dialog = self._capture(
+            qapp,
+            key,
+            Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier,
+        )
+        assert dialog.combo is not None, f"{key} 未被接受"
+        assert dialog.combo.key == digit
+
+    def test_无法映射的符号主键被可读拒绝(self, qapp):
+        # Key_Less（Shift+逗号）产出 '<'：不在映射表也不受支持，
+        # 必须经 parse 可读拒绝而非被接受后炸注册链
+        dialog = self._capture(
+            qapp,
+            Qt.Key.Key_Less,
+            Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier,
+        )
+        assert dialog.combo is None
+        assert "不支持" in dialog._feedback.text()
+        assert dialog.isVisible()
+
+
+class TestUnknownKeyGuard:
+    """review 75-1 后半：register/rebind 对未知主键走可读失败路径，
+    不得抛未捕获 KeyError 致旧热键静默丢失。"""
+
+    def test_注册未知主键不抛且可读失败(self, qapp):
+        hotkey = GlobalHotkey()
+        combo = HotkeyCombo(frozenset({"Ctrl", "Shift"}), "!")
+        ok = hotkey.register(combo)
+        assert ok is False
+        assert "不支持" in hotkey.last_error
+
+    def test_rebind未知主键不崩且恢复原组合(self, qapp):
+        hotkey = GlobalHotkey(hotkey_id=51)
+        try:
+            assert hotkey.register(COMBO_A) is True
+            ok, message = hotkey.rebind(HotkeyCombo(frozenset({"Ctrl", "Shift"}), "!"))
+            assert ok is False
+            assert "不支持" in message  # 可读失败原因（review 75-1）
+            assert hotkey.combo == COMBO_A  # 原组合恢复注册且继续生效
+        finally:
+            hotkey.unregister()

@@ -77,3 +77,25 @@
 - 变更已提交（719105e），主体机制（单实例/热键/自启/托盘）质量高、AGENTS.md 全量通过，可继续推进。
 - 三个 75 分项建议另起一笔 `FIX:` 提交（75-1 约 20 行+用例、75-2 约 5 行、75-3 一行+注释核实，合计一个下午工作量），修复后在本文件追加修复落地记录；60-1（§9.1 补 5 键 2 段）与 50 分中的 4/6/7（一行级）建议随批顺手处理。
 - 三个 75 分项共同点：**新增交互路径的收尾**（重绑崩溃链、托盘截图反馈、退出等待）——与主体机制无关，均为装配/边界层缺陷。
+
+## 修复落地记录（2026-08-25）
+
+红绿流程：每项先写红测试在未修复代码上复现，再修复转绿。全量 **425 passed**（修复前 406，新增 19 个回归用例）。
+
+| 项 | 修复方式 | 验证（红 → 绿） |
+|---|---|---|
+| 75-1 符号键链 | ①对话框 `_key_name_for`：十个数字符号键（Key_Exclam→'1' 等）映射回 unshifted 主键；构造改经 `HotkeyCombo.parse` 统一校验（对话框不再绕过）②`register` 在注销旧组合**之前**加 `_KEY_VK` 存在性前置校验，未知主键走 last_error 可读路径；`native_vk` 兜底抛 `HotkeyError` | 红：Ctrl+Shift+Key_Exclam 被接受为 `Ctrl+Shift+!` + rebind 链 `KeyError('!')` 且 `registered=False`；绿：13 用例（十符号映射 / Key_Less 可读拒绝 / register 未知主键 False 不抛 / rebind 恢复原组合且 message 含「不支持」） |
+| 75-2 托盘截图不置前 | 新增 `MainWindow.start_capture_and_show()` 共用入口（置前 + 截图），托盘 `captureRequested` 与热键 `_on_global_hotkey` 均接此 | 红：方法不存在（3 用例）；绿：驻留态共用入口先置后截图、全局热键与托盘同入口 |
+| 75-3 排空等错池 | `_release_resources` 改 `controller.pool.waitForDone(_SHUTDOWN_DRAIN_MS)`；三处注释核实（closeEvent docstring、`_SHUTDOWN_DRAIN_MS`、test_tray_ui 注释） | 探针已证全局池 0.000s 立返 vs 私有池 1.102s；回归锚点 `TestShutdownDrainPool`（私有池真实等待 >0.3s + 全局池空对照） |
+| 60-1 §9.1 漏更 | 示例补 5 键 2 段（ui 三键 + hotkey.capture + system.auto_start）+ 注意段说明默认值语义与注册表真源 | grep 五键全书出现；与 defaults.py/config/default.json 三处一致 |
+| 50-1 对话框期间热键未挂起 | `_open_hotkey_dialog` 进入时 `unregister`（挂起前保存组合），结束路径统一恢复（rebind 成功则新组合已注册；取消/失败则重注册原组合） | `test_对话框期间挂起热键_取消后恢复`：模态期间 registered=False，结束后恢复（calls 序列 register→unregister→register） |
+| 50-3 busy 时先置前 | busy 守卫移到 `start_capture_and_show` 首行（拒绝时零副作用：不置前不截图，仅状态区提示） | `test_识别中共用入口拒绝且无置前副作用`：busy 下窗口保持隐藏、截图零调用 |
+| 50-4 assert_dist 缺 resources | 补 `resources/icons/tray-256.png` 存在性断言 | `assert_dist.ps1 -DistDir dist/OCRTool` 通过（产物含图标） |
+| 50-5 互斥量静默分支 | listen 失败（DEGRADED）时释放互斥量（`_release_mutex`），与「以放弃单实例为代价继续可用」语义对齐；application 概括注释补竞态分支例外说明 | 既有降级用例回归通过（DEGRADED 不再持仲裁） |
+| 50-6 对话框累积 | exec 后 `finally: dialog.deleteLater()` | `test_对话框exec后释放不累积`：20 次开合 + DeferredDelete 派发后 findChildren 为空 |
+| 50-7 tasks.md 账目 | 删 5.7 重复未勾行（真实完成度回到 44/47）；2.7 注记改为「显式调用 hotkey/guard/tray.shutdown + 控制器私有池有界排空」 | grep 5.7 单行；注记与 `_release_resources` 实现一致 |
+| 50-9 docstring 顺序 | application 模块 docstring 改「解除 → 单实例检测 → …」与实际执行序一致 | 人工核对 |
+| 50-10 docstring 矛盾 | hotkey 模块 docstring「时间阈值抑制」改「等待释放状态机 + 30ms 键态轮询」 | 与 `_RELEASE_POLL_MS` 常量注释一致 |
+| 50-2 多副本值名互抢 | **未修**（spec/design 未覆盖自启×多副本，涉及旧值迁移逻辑，留待单独变更） | — |
+| 50-8 测试触真实资源 | **留档**（沿既往处理，值名 UUID 隔离 + finally 清理已缓解） | — |
+| 40-1 TestShowDecision dict 恒 miss | **不修**（报告自身不建议：恒 miss 意外提供回退默认值敏感性） | — |

@@ -176,6 +176,10 @@ class SingleInstanceGuard(QObject):
                 self._name,
                 server.errorString(),
             )
+            # 持仲裁却不监听 = 拦截所有后来者又无法被其激活（此后双击
+            # 永久无反应）——释放互斥量，与「以放弃单实例为代价继续
+            # 可用」语义对齐（review 50-5）
+            self._release_mutex()
             return SingleInstanceOutcome.DEGRADED
         server.newConnection.connect(self._on_new_connection)
         self._server = server
@@ -215,6 +219,9 @@ class SingleInstanceGuard(QObject):
             self._server.close()
             self._server = None
             logger.info("实例端点已释放（端点=%s）", self._name)
+        self._release_mutex()
+
+    def _release_mutex(self) -> None:
         if self._mutex is not None:
             _kernel32.ReleaseMutex(self._mutex)
             _kernel32.CloseHandle(self._mutex)

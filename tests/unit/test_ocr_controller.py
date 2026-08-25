@@ -347,3 +347,27 @@ class TestModelSwitching:
         controller.switch_model(target_model())
         process_events_until(qapp, lambda: not controller.busy)
         assert observer.busy_flips == [True, False]
+
+
+class TestShutdownDrainPool:
+    """review 75-3：识别 worker 在控制器私有池，退出排空必须等对池子。"""
+
+    def test_私有池上的任务被真实等待(self, qapp):
+        import time as _time
+
+        from PySide6.QtCore import QRunnable, QThreadPool
+
+        class Sleeper(QRunnable):
+            def run(self):
+                _time.sleep(0.6)
+
+        controller, _ = make_controller(FakeService(), qapp)
+        controller.pool.start(Sleeper())
+        _time.sleep(0.1)  # 任务进入运行
+        t0 = _time.perf_counter()
+        assert controller.pool.waitForDone(5000) is True
+        assert _time.perf_counter() - t0 > 0.3  # 真实等待，而非空池立返
+        # 对照锚点：全局池此刻必然为空（任务从未提交到全局池）
+        t0 = _time.perf_counter()
+        QThreadPool.globalInstance().waitForDone(5000)
+        assert _time.perf_counter() - t0 < 0.05

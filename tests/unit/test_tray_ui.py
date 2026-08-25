@@ -216,7 +216,8 @@ class TestCloseBehavior:
 
     def test_识别进行中关闭不阻止退出(self, qapp, tmp_path, monkeypatch):
         # spec: system-tray 识别进行中退出——closeEvent 不得因 busy 拒绝；
-        # 后台线程的收尾由 application 的 aboutToQuit 等待（waitForDone）
+        # 后台线程的收尾由 application 的 aboutToQuit 在控制器私有池上
+        # 有界等待（waitForDone，review 75-3）
         win, _ = make_window(qapp, tmp_path, monkeypatch, tray_available=False)
         monkeypatch.setattr(
             type(win._controller), "busy", property(lambda self: True)
@@ -317,3 +318,119 @@ class TestHotkeyWiring:
         win._on_global_hotkey()
         assert calls == [1]
         assert win.isVisible()  # 唤起：窗口恢复可见（结果不静默丢弃）
+
+
+from ocrtool.platform.hotkey import HotkeyCombo
+
+
+class FakeHotkey2(QObject):
+    """带 register/unregister 生命周期记录的热键替身（review 50-1/50-6 用）。"""
+
+    triggered = Signal()
+
+    def __init__(self, ok: bool = True) -> None:
+        super().__init__()
+        self.ok = ok
+        self.calls: list[tuple] = []
+        self._combo = None
+
+    @property
+    def combo(self):
+        return self._combo
+
+    @property
+    def registered(self) -> bool:
+        return self._combo is not None
+
+    def register(self, combo) -> bool:
+        self.calls.append(("register", combo))
+        self._combo = combo
+        return True
+
+    def unregister(self) -> None:
+        self.calls.append(("unregister",))
+        self._combo = None
+
+    def rebind(self, combo):
+        self.calls.append(("rebind", combo))
+        if self.ok:
+            self._combo = combo
+            return True, f"快捷键已更新为 {combo.format()}"
+        return False, "新组合不可用：已被其他程序占用，已保留原组合"
+
+
+class TestCaptureEntryUnified:
+    """review 75-2/50-3：托盘与热键共用截图入口；busy 拒绝无副作用。"""
+
+    def test_驻留态共用入口先置前再截图(self, qapp, tmp_path, monkeypatch):
+        win, _ = make_window(qapp, tmp_path, monkeypatch, tray_available=True)
+        win.hide()
+        qapp.processEvents()
+        calls = []
+        monkeypatch.setattr(MainWindow, "start_region_capture", lambda self: calls.append(1))
+        win.start_capture_and_show()
+        assert calls == [1]
+        assert win.isVisible()  # 结果不得静默丢进剪贴板（review 75-2）
+
+    def test_识别中共用入口拒绝且无置前副作用(self, qapp, tmp_path, monkeypatch):
+        win, _ = make_window(qapp, tmp_path, monkeypatch, tray_available=True)
+        win.hide()
+        qapp.processEvents()
+        monkeypatch.setattr(type(win._controller), "busy", property(lambda self: True))
+        calls = []
+        monkeypatch.setattr(MainWindow, "start_region_capture", lambda self: calls.append(1))
+        win.start_capture_and_show()
+        assert calls == []
+        assert not win.isVisible()  # 拒绝时不得先抢焦点置前（review 50-3）
+
+    def test_全局热键与托盘共用同一入口(self, qapp, tmp_path, monkeypatch):
+        win, _ = make_window(qapp, tmp_path, monkeypatch, tray_available=True)
+        calls = []
+        monkeypatch.setattr(MainWindow, "start_capture_and_show", lambda self: calls.append(1))
+        win._on_global_hotkey()
+        assert calls == [1]
+
+
+class TestHotkeyDialogLifecycle:
+    """review 50-1/50-6：对话框期间挂起热键；exec 后释放不累积。"""
+
+    def _window_with_hotkey(self, qapp, tmp_path, monkeypatch):
+        win, _ = make_window(qapp, tmp_path, monkeypatch)
+        hotkey = FakeHotkey2()
+        hotkey.register(HotkeyCombo.parse("Ctrl+Alt+F9"))
+        win.attach_hotkey(hotkey)
+        return win, hotkey
+
+    def test_对话框exec后释放不累积(self, qapp, tmp_path, monkeypatch):
+        from PySide6.QtCore import QEvent
+
+        from ocrtool.ui.widgets.hotkey_capture_dialog import HotkeyCaptureDialog
+
+        win, _ = self._window_with_hotkey(qapp, tmp_path, monkeypatch)
+        monkeypatch.setattr(
+            HotkeyCaptureDialog, "exec", lambda self: HotkeyCaptureDialog.DialogCode.Rejected
+        )
+        for _ in range(20):
+            win._open_hotkey_dialog()
+        qapp.processEvents()
+        from PySide6.QtCore import QCoreApplication
+
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        assert win.findChildren(HotkeyCaptureDialog) == []
+
+    def test_对话框期间挂起热键_取消后恢复(self, qapp, tmp_path, monkeypatch):
+        from ocrtool.ui.widgets.hotkey_capture_dialog import HotkeyCaptureDialog
+
+        win, hotkey = self._window_with_hotkey(qapp, tmp_path, monkeypatch)
+        seen_during = {}
+
+        def fake_exec(self):
+            seen_during["registered"] = hotkey.registered
+            return HotkeyCaptureDialog.DialogCode.Rejected
+
+        monkeypatch.setattr(HotkeyCaptureDialog, "exec", fake_exec)
+        win._open_hotkey_dialog()
+        assert seen_during["registered"] is False  # 模态期间热键已挂起（50-1）
+        assert hotkey.registered is True  # 取消后恢复原组合
+        kinds = [c[0] for c in hotkey.calls]
+        assert kinds == ["register", "unregister", "register"]

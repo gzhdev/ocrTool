@@ -5,10 +5,10 @@
 启动不加载模型（spec: ocr-engine 惰性加载）。
 
 常驻改造（background-residency design D7 启动决策流）：
-单实例检测（已有实例 → 请求其显示窗口后本次退出）→ 解除「最后一个
-窗口关闭即退出」→ 托盘可用性 → 显示决策（登录自启/最小化配置驻留
-托盘，托盘不可用时必须显示主窗口，不做隐形进程）→ 退出时释放全部
-系统资源（spec: system-tray）。
+解除「最后一个窗口关闭即退出」→ 单实例检测（已有实例 → 请求其显示
+窗口后本次退出；登录自启拉起的例外见 guard 实现）→ 托盘可用性 →
+显示决策（登录自启/最小化配置驻留托盘，托盘不可用时必须显示主窗口，
+不做隐形进程）→ 退出时释放全部系统资源（spec: system-tray）。
 """
 
 from __future__ import annotations
@@ -32,8 +32,9 @@ from ocrtool.utils import logger as app_logging
 
 logger = logging.getLogger("ocrtool.app")
 
-# 退出时等待后台识别收尾的上限：正常识别数秒内完成，超时强制退出
-# 避免极端场景下进程杀不掉（spec: system-tray 识别进行中退出）
+# 退出时等待后台识别收尾的上限：识别与模型切换 worker 全部运行在
+# 控制器的私有容量 1 线程池上，超时强制退出避免极端场景（如推理线程
+# 卡死）下进程杀不掉（spec: system-tray 识别进行中退出）
 _SHUTDOWN_DRAIN_MS = 10_000
 
 
@@ -105,7 +106,6 @@ def should_show_main_window(
 
 def run(argv: Sequence[str] | None = None) -> int:
     """图形界面入口。"""
-    from PySide6.QtCore import QThreadPool
     from PySide6.QtWidgets import QApplication
 
     from ocrtool.main import window_title
@@ -126,7 +126,9 @@ def run(argv: Sequence[str] | None = None) -> int:
 
         # 单实例：已有实例存活时传达激活意图后本次启动立即退出；
         # 登录自启（--tray）拉起的实例例外——不激活已有实例的窗口
-        # （spec: auto-start 自启时已有实例在运行）
+        # （spec: auto-start 自启时已有实例在运行）。注：对方持有互斥量
+        # 仲裁但端点尚未监听的毫秒级竞态分支同样静默退出、不激活
+        # （无管道可写，属端点方案固有局限，见 single_instance 实现）
         guard = SingleInstanceGuard()
         if (
             guard.check_and_listen(activate_existing="--tray" not in argv)
@@ -159,7 +161,9 @@ def run(argv: Sequence[str] | None = None) -> int:
 
         if tray.available:
             tray.showRequested.connect(window.bring_to_front)
-            tray.captureRequested.connect(window.start_region_capture)
+            # 托盘截图与热键共用入口：先置前再截图，驻留态结果不静默
+            # 丢进剪贴板（review 75-2：两条等价入口行为一致）
+            tray.captureRequested.connect(window.start_capture_and_show)
             tray.quitRequested.connect(app.quit)
             tray.closeToTrayToggled.connect(window.set_close_to_tray)
             tray.autoStartToggled.connect(
@@ -174,11 +178,12 @@ def run(argv: Sequence[str] | None = None) -> int:
 
         def _release_resources() -> None:
             # 退出路径统一释放系统资源（spec: system-tray 退出时释放）：
-            # 全局快捷键注销、实例端点、托盘图标、后台识别收尾
+            # 全局快捷键注销、实例端点、托盘图标、后台识别收尾——
+            # worker 在控制器私有池上，须等对池子而非全局池（review 75-3）
             hotkey.shutdown()
             guard.shutdown()
             tray.shutdown()
-            QThreadPool.globalInstance().waitForDone(_SHUTDOWN_DRAIN_MS)
+            controller.pool.waitForDone(_SHUTDOWN_DRAIN_MS)
 
         app.aboutToQuit.connect(_release_resources)
     except Exception:

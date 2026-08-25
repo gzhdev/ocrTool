@@ -45,7 +45,7 @@
 - [x] 2.6 实现首次隐藏到托盘时的一次性提示，验证此后不再重复出现
   - 实施注记：`ui.tray_hint_done` 配置标记；`test_首次驻留提示只出现一次`（再次关闭不再提示且已持久化）
 - [x] 2.7 实现退出时释放全部系统资源（快捷键、实例端点、托盘图标）
-  - 实施注记：`run()` 的 aboutToQuit → `_release_resources`：guard.shutdown() + tray.shutdown() + QThreadPool waitForDone(10s)；热键注销在 GlobalHotkey 析构/aboutToQuit 接入（组 3 落地后自动覆盖）
+  - 实施注记：`run()` 的 aboutToQuit → `_release_resources` 显式调用 hotkey.shutdown() + guard.shutdown() + tray.shutdown()，并在控制器私有容量 1 线程池上有界排空（review 75-3 修正）
 - [x] 2.8 验证识别进行中请求退出可正常退出
   - 实施注记：closeEvent 不因 busy 拒绝（单测 `test_识别进行中关闭不阻止退出`）；后台识别收尾由 aboutToQuit 的 waitForDone(10s) 承担，超时强退避免杀不掉
 - [x] 2.9 实现托盘不可用时降级为前台程序，且此时关闭窗口即退出
@@ -113,4 +113,3 @@
   - 实施注记：三项已勾选（UI 设置窗口仍未实现，保持未勾）
 - [x] 5.7 `openspec validate --strict background-residency` 通过
   - 实施注记：`Change 'background-residency' is valid`；全量测试 406 passed（含本变更新增 5 个测试文件与既有回归）
-- [ ] 5.7 `openspec validate --strict background-residency` 通过

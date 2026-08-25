@@ -444,8 +444,9 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:
         """关闭窗口 = 隐藏到托盘（可配置且托盘可用）或退出程序。
 
-        识别进行中不阻止退出：识别在后台线程池，退出流程会等待其完成
-        （spec: system-tray 识别进行中退出）。托盘不可用时永远走退出
+        识别进行中不阻止退出：识别在控制器私有线程池，退出流程经
+        waitForDone(10s) 有界等待其完成（spec: system-tray 识别进行中
+        退出）。托盘不可用时永远走退出
         分支——不能把程序藏进一个不存在的托盘（spec: system-tray 降级）。
         """
         if (
@@ -490,11 +491,20 @@ class MainWindow(QMainWindow):
         hotkey.triggered.connect(self._on_global_hotkey)
 
     def _on_global_hotkey(self) -> None:
-        """快捷键触发 = 唤起截图识别（screen-region-ocr 已完成，任务 5.1）。
+        """快捷键触发 = 唤起截图识别（screen-region-ocr 已完成，任务 5.1）。"""
+        self.start_capture_and_show()
 
-        先置前再进入截图流程：流程自身会隐藏主窗口截图、结束后恢复，
-        识别结果与状态对用户可见——不把结果静默丢进剪贴板。
+    def start_capture_and_show(self) -> None:
+        """托盘菜单与全局快捷键共用的截图入口。
+
+        busy 守卫必须先于置前（review 50-3：拒绝时不得先抢焦点）；
+        通过守卫后先置前再进入截图流程：流程自身会隐藏主窗口截图、
+        结束后按发起前可见性恢复，识别结果对用户可见——不把结果
+        静默丢进剪贴板（review 75-2：两条入口行为一致）。
         """
+        if self._controller.busy:
+            self._notify_status("识别进行中，请等待完成后再发起截图")
+            return
         self.bring_to_front()
         self.start_region_capture()
 
@@ -504,12 +514,25 @@ class MainWindow(QMainWindow):
         if self._hotkey is None:
             self._notify_status("本会话未启用全局快捷键")
             return
+        # 对话框期间挂起热键（review 50-1）：模态对话框拦不住原生事件
+        # 过滤器，当前组合在框内按下会叠出截图覆盖层（且对话框被拍进
+        # 冻结帧）——先注销，结束后恢复
+        suspended = self._hotkey.combo
+        if suspended is not None:
+            self._hotkey.unregister()
         dialog = HotkeyCaptureDialog(
             current_text=self._config.get("hotkey.capture", ""), parent=self
         )
-        if dialog.exec() and dialog.combo is not None:
+        try:
+            accepted = dialog.exec()
+        finally:
+            dialog.deleteLater()  # exec 后释放，不随开随累积（review 50-6）
+        if accepted and dialog.combo is not None:
             _ok, message = self.apply_hotkey_combo(dialog.combo)
             self._notify_status(message)
+        # 挂起恢复：取消路径，或 rebind 失败且恢复亦失败时的兜底
+        if not self._hotkey.registered and suspended is not None and self._hotkey.register(suspended):
+            self._notify_status("已恢复原快捷键")
 
     def apply_hotkey_combo(self, combo) -> tuple[bool, str]:
         """应用新组合：先注销旧再注册新（rebind）；仅成功才写配置。

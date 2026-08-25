@@ -539,7 +539,16 @@ config/default.json
   },
   "ui": {
     "auto_copy": true,
-    "show_boxes": false
+    "show_boxes": false,
+    "close_to_tray": false,
+    "start_minimized": false,
+    "tray_hint_done": false
+  },
+  "hotkey": {
+    "capture": "Alt+Shift+A"
+  },
+  "system": {
+    "auto_start": false
   },
   "logging": {
     "level": "INFO"
@@ -547,7 +556,7 @@ config/default.json
 }
 ```
 
-注意：配置中不存在方向分类（orientation/cls）相关开关——该能力已整体移除，保留开关项会暗示能力可被开启。`ui.auto_copy`（识别成功且检出文本时自动复制，默认**开启**——空结果与识别失败不写剪贴板，避免清空用户原有内容）已随 `screen-region-ocr` 落地；早期草案中的 `always_on_top` / `auto_ocr_after_open` / `screenshot` 段属后续阶段，未在当前基线实现。
+注意：配置中不存在方向分类（orientation/cls）相关开关——该能力已整体移除，保留开关项会暗示能力可被开启。`ui.auto_copy`（识别成功且检出文本时自动复制，默认**开启**——空结果与识别失败不写剪贴板，避免清空用户原有内容）已随 `screen-region-ocr` 落地；`ui.close_to_tray` / `ui.start_minimized` / `ui.tray_hint_done` 与 `hotkey.capture` / `system.auto_start` 随 `background-residency` 落地（默认不驻留、不静默自启，常驻由用户主动开启；`system.auto_start` 仅记录用户意图，实际生效状态以注册表登录启动项为准）。早期草案中的 `always_on_top` / `auto_ocr_after_open` / `screenshot` 段属后续阶段，未在当前基线实现。
 
 ---
 
