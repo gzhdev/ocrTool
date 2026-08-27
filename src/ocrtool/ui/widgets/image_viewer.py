@@ -15,7 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QPointF, Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QDragEnterEvent,
@@ -116,8 +116,17 @@ class ImageViewer(QGraphicsView):
 
         self._scene.clear()  # 连带销毁位置框图形项（C++ 侧已析构）
         self._reset_box_state()
-        self._pixmap_item = self._scene.addPixmap(QPixmap.fromImage(image))
-        self._scene.setSceneRect(QRectF(self._pixmap_item.pixmap().rect()))
+        pixmap = QPixmap.fromImage(image)
+        # 场景坐标必须等于图像像素坐标——识别框正是以此为坐标系。截图捕获
+        # 的图带着来源屏幕的 dpr（region_overlay 标在快照 pixmap 上，沿
+        # copy → toImage 全程保留），而 QGraphicsPixmapItem 只按 size/dpr
+        # 占位，缩放屏幕下框会整体放大 dpr 倍并自左上角向右下发散，故在
+        # 入场景前统一抹平：预览的一个场景单位恒等于图像的一个像素。
+        pixmap.setDevicePixelRatio(1.0)
+        self._pixmap_item = self._scene.addPixmap(pixmap)
+        # 取图形项自身的 boundingRect 而非 pixmap.rect()：前者才是场景中的
+        # 实际占位，二者仅在 dpr==1 时相等
+        self._scene.setSceneRect(self._pixmap_item.boundingRect())
         self._adaptive = True
         self.fit_to_view()
 

@@ -254,6 +254,48 @@ class TestGeometryBuild:
 # ---- 2. 叠加绘制与视图变换 ----
 
 
+class TestDevicePixelRatio:
+    """截图捕获的图带着来源屏幕的 dpr —— 缩放屏幕下的识别框错位。
+
+    既有贴合性用例全部以 dpr==1 的合成图构造，且只在场景坐标系内自比，
+    对这一类缺陷结构性不可见：错的不是框的坐标，而是图像项在场景中的
+    占位（size/dpr）。故此处一律对照 `_pixmap_item.boundingRect()`。
+    """
+
+    @pytest.mark.parametrize("dpr", [1.0, 1.25, 1.5, 2.0])
+    def test_带dpr的图像在场景中仍按像素尺寸占位(self, qapp, dpr):
+        viewer = ImageViewer()
+        viewer.resize(500, 400)
+        image = solid_image((900, 600), (255, 255, 255))
+        image.setDevicePixelRatio(dpr)  # 缩放屏幕捕获所得
+        viewer.set_image(image)
+        viewer.show()
+        qapp.processEvents()
+
+        # 一个场景单位恒等于图像的一个像素，识别框才有共同坐标系
+        assert viewer._pixmap_item.boundingRect().size().toTuple() == (900.0, 600.0)
+        assert viewer._scene.sceneRect().size().toTuple() == (900.0, 600.0)
+
+    @pytest.mark.parametrize("dpr", [1.25, 1.5, 2.0])
+    def test_带dpr时贴边框不溢出图像(self, qapp, dpr):
+        """未抹平 dpr 时，右下角的框会溢出图像 (dpr-1)×尺寸。"""
+        viewer = ImageViewer()
+        viewer.resize(500, 400)
+        image = solid_image((900, 600), (255, 255, 255))
+        image.setDevicePixelRatio(dpr)
+        viewer.set_image(image)
+        viewer.show()
+        qapp.processEvents()
+
+        box = ((800.0, 500.0), (880.0, 500.0), (880.0, 560.0), (800.0, 560.0))
+        viewer.set_boxes(polygons_from_result(make_result([box])))
+        item = viewer.box_item(0)
+        image_rect = viewer._pixmap_item.boundingRect()
+        for index in range(4):
+            point = item.mapToScene(item.polygon().at(index))
+            assert image_rect.contains(point), f"顶点{point.toTuple()}落在图像之外"
+
+
 class TestOverlayDrawing:
     def test_框绘制在预览层之上且位置正确(self, qapp):
         """2.1：渲染级断言——描边像素出现在框顶点的视口位置处。"""
