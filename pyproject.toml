@@ -1,6 +1,6 @@
 [project]
 name = "ocr-tool"
-version = "0.2.0"
+version = "0.2.1"
 description = "OCRTool —— Windows 桌面本地 OCR 工具（PySide6 + RapidOCR + ONNX Runtime CPU，完全离线）"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
@@ -10,6 +10,9 @@ dependencies = [
     "rapidocr",
     "pyinstaller",
     "opencv-python-headless",
+    # numpy 2.4 起 win_amd64 wheel 的 SIMD 基线抬到 x86-64-v2，目标客户机 CPU 不支持，
+    # import 即崩（源码四处直接 import numpy，此前未声明、版本由第三方解析决定）。
+    "numpy<2.4",
 ]
 
 [project.scripts]
