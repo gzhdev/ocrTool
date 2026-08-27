@@ -1,6 +1,6 @@
 [project]
 name = "ocr-tool"
-version = "0.2.1"
+version = "0.2.2"
 description = "OCRTool —— Windows 桌面本地 OCR 工具（PySide6 + RapidOCR + ONNX Runtime CPU，完全离线）"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
